@@ -1,776 +1,877 @@
-import { api } from './api.js';
-import { CATEGORIES, CATEGORY_ICONS, SERIAL_STATUSES, TABS } from './constants.js';
-import {
-  escapeHtml,
-  formatMoney,
-  today,
-  currentMonth,
-  nextMonth,
-  getNextName,
-  groupLedgerByDate,
-  buildStats,
-  toCsvCell,
-} from './utils.js';
+(() => {
+    const FinanceUI = window.FinanceUI;
+    const {
+        useState,
+        useEffect,
+        useMemo,
+        createRoot,
+        api,
+        today,
+        currentMonthStr,
+        currentYearStr,
+        beijingTimestampLabel,
+        CATEGORIES,
+        CAT_ICONS,
+        SERIAL_STATUS_LABELS,
+        monthFromDate,
+        yearFromDate,
+        safeNumber,
+        formatMoney,
+        buildCategoryBreakdown,
+        buildNameRanking,
+        buildMonthlyTotals,
+        escapeCsvValue,
+        Notice,
+        Auth,
+        QuickAdd,
+        SerialAdvance,
+        EditLedgerModal,
+        AISettingsModal,
+        AIAnalysisModal,
+        DataMenu,
+    } = FinanceUI;
 
-const state = {
-  token: api.getToken(),
-  loading: false,
-  currentMonth: currentMonth(),
-  activeTab: 'dashboard',
-  authMode: 'login',
-  authError: '',
-  notice: '',
-  noticeType: 'info',
-  data: {
-    subscriptions: [],
-    serials: [],
-    ledger: [],
-    budget: 0,
-  },
-  quickAddOpen: false,
-  advanceSerialId: null,
-};
+    function App() {
+        const [token, setToken] = useState(localStorage.getItem('token'));
+        const [loading, setLoading] = useState(true);
+        const [currentMonth, setCurrentMonth] = useState(currentMonthStr());
+        const [currentDate, setCurrentDate] = useState(today());
+        const [currentYear, setCurrentYear] = useState(currentYearStr());
+        const [data, setData] = useState({ subscriptions: [], serials: [], ledger: [], budget: 0 });
+        const [allData, setAllData] = useState({ subscriptions: [], serials: [], ledger_items: [], budgets: [] });
+        const [activeTab, setActiveTab] = useState('dashboard');
+        const [statsMode, setStatsMode] = useState('month');
+        const [showQuickAdd, setShowQuickAdd] = useState(false);
+        const [advancingSerial, setAdvancingSerial] = useState(null);
+        const [editingLedgerItem, setEditingLedgerItem] = useState(null);
+        const [notice, setNotice] = useState({ text: '', type: 'info' });
+        const [refreshTime, setRefreshTime] = useState('');
+        const [showAISettings, setShowAISettings] = useState(false);
+        const [savingAISettings, setSavingAISettings] = useState(false);
+        const [aiSettings, setAiSettings] = useState({
+            provider: 'deepseek',
+            endpointUrl: 'https://api.deepseek.com/v1/chat/completions',
+            model: 'deepseek-chat',
+            apiKey: '',
+            hasApiKey: false,
+            updatedAt: null,
+        });
+        const [aiAnalysis, setAiAnalysis] = useState({ open: false, loading: false, error: '', result: null });
+        const [showMonthRankingAll, setShowMonthRankingAll] = useState(false);
+        const [showYearRankingAll, setShowYearRankingAll] = useState(false);
 
-const root = document.getElementById('app');
+        useEffect(() => {
+            if (token) {
+                fetchData();
+                fetchAISettings();
+            } else {
+                setLoading(false);
+            }
+        }, [token, currentMonth]);
 
-function setNotice(message, type = 'info') {
-  state.notice = message;
-  state.noticeType = type;
-  render();
-}
+        useEffect(() => { lucide.createIcons(); }, [activeTab, data, allData, showAISettings, aiAnalysis, editingLedgerItem]);
 
-function clearNotice() {
-  state.notice = '';
-  state.noticeType = 'info';
-}
+        const showError = (error) => setNotice({ text: error.message || '操作失败', type: 'error' });
+        const showSuccess = (text) => setNotice({ text, type: 'success' });
 
-function getSelectedSerial() {
-  return state.data.serials.find((serial) => serial.id === state.advanceSerialId) || null;
-}
+        const fetchAISettings = async () => {
+            api.token = token;
+            try {
+                const res = await api.get('/api/ai-settings');
+                setAiSettings((prev) => ({
+                    ...prev,
+                    provider: res.provider || 'deepseek',
+                    endpointUrl: res.endpointUrl || 'https://api.deepseek.com/v1/chat/completions',
+                    model: res.model || 'deepseek-chat',
+                    apiKey: '',
+                    hasApiKey: !!res.hasApiKey,
+                    updatedAt: res.updatedAt || null,
+                }));
+            } catch (_error) {}
+        };
 
-function renderNotice() {
-  if (!state.notice) {
-    return '';
-  }
+        const fetchData = async () => {
+            setLoading(true);
+            api.token = token;
+            try {
+                const [dashboard, exported] = await Promise.all([
+                    api.get('/api/data?month=' + currentMonth),
+                    api.get('/api/export/all?month=' + currentMonth),
+                ]);
+                setData(dashboard);
+                setAllData(exported);
+                setRefreshTime(beijingTimestampLabel());
+            } catch (error) {
+                showError(error);
+                if (error.status === 401 || error.status === 403) {
+                    localStorage.removeItem('token');
+                    api.token = '';
+                    setToken(null);
+                }
+            }
+            setLoading(false);
+        };
 
-  return `<div class="notice notice-${state.noticeType}">${escapeHtml(state.notice)}</div>`;
-}
+        const ledgerItems = allData.ledger_items || [];
+        const dayLedger = useMemo(() => ledgerItems.filter(item => item.date === currentDate), [ledgerItems, currentDate]);
+        const monthLedger = useMemo(() => ledgerItems.filter(item => monthFromDate(item.date) === currentMonth), [ledgerItems, currentMonth]);
+        const yearLedger = useMemo(() => ledgerItems.filter(item => yearFromDate(item.date) === String(currentYear)), [ledgerItems, currentYear]);
+        const groupedLedger = useMemo(() => {
+            const groups = {};
+            data.ledger.forEach(item => {
+                if (!groups[item.date]) groups[item.date] = [];
+                groups[item.date].push(item);
+            });
+            return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
+        }, [data.ledger]);
 
-function renderAuth() {
-  return `
-    <main class="auth-shell">
-      <section class="auth-card">
-        <div class="auth-brand">
-          <p class="eyebrow">Finance App</p>
-          <h1>财务指挥中心</h1>
-          <p class="muted">拆分后的静态前端会继续调用原有 API，部署方式保持不变。</p>
-        </div>
-        ${renderNotice()}
-        <form id="auth-form" class="stack">
-          <label class="field">
-            <span>用户名</span>
-            <input name="username" maxlength="32" autocomplete="username" required>
-          </label>
-          <label class="field">
-            <span>密码</span>
-            <input name="password" type="password" minlength="8" maxlength="72" autocomplete="${state.authMode === 'login' ? 'current-password' : 'new-password'}" required>
-          </label>
-          ${state.authMode === 'register' ? `
-            <label class="field">
-              <span>邀请码</span>
-              <input name="inviteCode" maxlength="64" required>
-            </label>
-          ` : ''}
-          ${state.authError ? `<p class="error-text">${escapeHtml(state.authError)}</p>` : ''}
-          <button class="primary-btn" type="submit">${state.authMode === 'login' ? '登录' : '注册'}</button>
-        </form>
-        <button class="link-btn" type="button" data-action="toggle-auth-mode">
-          ${state.authMode === 'login' ? '使用邀请码注册' : '返回登录'}
-        </button>
-      </section>
-    </main>
-  `;
-}
+        const subStats = useMemo(() => {
+            let cost = 0;
+            const warnings = [];
+            (allData.subscriptions || []).forEach(sub => {
+                if (!Number(sub.is_active)) return;
+                let price = safeNumber(sub.price);
+                if (sub.cycle_type === 'yearly') {
+                    price /= 12;
+                    if (String(sub.first_payment_date || '').slice(5, 7) === currentMonth.slice(5, 7)) warnings.push(sub);
+                } else if (sub.cycle_type === 'quarterly') {
+                    price /= 3;
+                }
+                cost += price;
+            });
+            return { cost, warnings };
+        }, [allData.subscriptions, currentMonth]);
 
-function renderWarningBanner(stats) {
-  if (stats.warnings.length === 0) {
-    return '';
-  }
+        const plannedSerialCost = useMemo(() =>
+            (allData.serials || [])
+                .filter(s => s.expected_release_date === currentMonth && s.status !== 'paid')
+                .reduce((sum, item) => sum + safeNumber(item.price), 0)
+        , [allData.serials, currentMonth]);
 
-  return `
-    <section class="banner danger">
-      <div class="banner-title">现金流警告</div>
-      <div class="banner-body">
-        ${stats.warnings.map((item) => `
-          <div>${escapeHtml(item.name)} 本月需扣款 <strong>¥${formatMoney(item.price, 0)}</strong></div>
-        `).join('')}
-      </div>
-    </section>
-  `;
-}
+        const actual = useMemo(() => {
+            const breakdown = buildCategoryBreakdown(data.ledger);
+            const total = data.ledger.reduce((sum, item) => sum + safeNumber(item.amount), 0);
+            return { total, breakdown };
+        }, [data.ledger]);
 
-function renderDashboard(stats) {
-  const budget = Number(state.data.budget) || 0;
-  const expectedTotal = stats.subscriptionCost + stats.planned;
-  const actualTotal = stats.actual.total;
+        const dayRanking = useMemo(() => buildNameRanking(dayLedger), [dayLedger]);
+        const monthRanking = useMemo(() => buildNameRanking(monthLedger), [monthLedger]);
+        const yearRanking = useMemo(() => buildNameRanking(yearLedger), [yearLedger]);
+        const yearMonthlyTotals = useMemo(() => buildMonthlyTotals(ledgerItems, currentYear), [ledgerItems, currentYear]);
+        const yearTotal = useMemo(() => yearLedger.reduce((sum, item) => sum + safeNumber(item.amount), 0), [yearLedger]);
+        const monthBudget = useMemo(() => {
+            const row = (allData.budgets || []).find(item => item.month_str === currentMonth);
+            return row ? safeNumber(row.budget_amount) : safeNumber(data.budget);
+        }, [allData.budgets, currentMonth, data.budget]);
+        const dayBreakdown = useMemo(() => buildCategoryBreakdown(dayLedger), [dayLedger]);
+        const monthBreakdown = useMemo(() => buildCategoryBreakdown(monthLedger), [monthLedger]);
+        const yearBreakdown = useMemo(() => buildCategoryBreakdown(yearLedger), [yearLedger]);
+        const maxYearMonth = useMemo(() => yearMonthlyTotals.reduce((max, item) => !max || item.total > max.total ? item : max, null), [yearMonthlyTotals]);
+        const actualSubscriptionLedger = useMemo(() =>
+            monthLedger.filter(item => item.category === 'subscription')
+        , [monthLedger]);
 
-  return `
-    <section class="stack">
-      ${renderWarningBanner(stats)}
-      <div class="card-grid">
-        <form id="budget-form" class="card budget-card">
-          <p class="eyebrow">本月预算</p>
-          <label class="money-input">
-            <span>¥</span>
-            <input name="amount" type="number" min="0" step="0.01" value="${escapeHtml(String(budget))}">
-          </label>
-          <button class="secondary-btn" type="submit">保存预算</button>
-        </form>
-        <article class="card">
-          <p class="eyebrow">预期消费</p>
-          <div class="hero-value">¥${formatMoney(expectedTotal, 0)}</div>
-          <p class="muted">订阅 ${formatMoney(stats.subscriptionCost, 0)} + 连载 ${formatMoney(stats.planned, 0)}</p>
-        </article>
-        <article class="card ${actualTotal > budget ? 'card-danger' : 'card-success'}">
-          <p class="eyebrow">实际支出</p>
-          <div class="hero-value">¥${formatMoney(actualTotal, 0)}</div>
-          <p class="muted">${actualTotal > budget ? '已超支' : '安全范围'}</p>
-        </article>
-      </div>
-    </section>
-  `;
-}
+        const refreshAll = async (successMessage) => {
+            await fetchData();
+            if (successMessage) showSuccess(successMessage);
+        };
 
-function renderSerials() {
-  return `
-    <section class="card">
-      <div class="section-header">
-        <div>
-          <h2>📦 连载追更</h2>
-          <p class="muted">保留原来的“结算并续杯”能力。</p>
-        </div>
-        <button class="primary-btn small" type="button" data-action="add-serial">+ 新增</button>
-      </div>
-      <div class="list">
-        ${state.data.serials.length === 0 ? '<p class="empty-state">无追更计划</p>' : state.data.serials.map((serial) => `
-          <article class="list-item">
-            <div>
-              <div class="list-title">${escapeHtml(serial.name)}</div>
-              <div class="muted">${escapeHtml(serial.expected_release_date)} · ${escapeHtml(SERIAL_STATUSES[serial.status] || serial.status)}</div>
+        const handleQuickAdd = async (item) => {
+            try {
+                await api.post('/api/ledger_items', item);
+                await refreshAll('记账成功');
+            } catch (error) {
+                showError(error);
+            }
+        };
+
+        const handleAdvanceSerial = async (id, payload) => {
+            try {
+                await api.post('/api/serials/' + id + '/advance', payload);
+                await refreshAll('连载已结算并续杯');
+            } catch (error) {
+                showError(error);
+            }
+        };
+
+        const deleteLedgerItem = async (id) => {
+            if (!confirm('确认删除这条记录吗?')) return;
+            try {
+                await api.delete('/api/ledger_items/' + id);
+                await refreshAll('记录已删除');
+            } catch (error) {
+                showError(error);
+            }
+        };
+
+        const updateLedgerItem = async (item) => {
+            try {
+                await api.put('/api/ledger_items/' + item.id, {
+                    date: item.date,
+                    category: item.category,
+                    name: item.name,
+                    amount: item.amount,
+                });
+                setEditingLedgerItem(null);
+                await refreshAll('记录已更新');
+            } catch (error) {
+                showError(error);
+            }
+        };
+
+        const saveSubscription = async (subscription, patch, successMessage) => {
+            const payload = {
+                name: patch.name ?? subscription.name,
+                price: patch.price ?? subscription.price,
+                cycle_type: patch.cycle_type ?? subscription.cycle_type,
+                first_payment_date: patch.first_payment_date ?? subscription.first_payment_date,
+                is_active: patch.is_active ?? Number(subscription.is_active || 0),
+            };
+            await api.put('/api/subscriptions/' + subscription.id, payload);
+            await refreshAll(successMessage);
+        };
+
+        const toggleSubscription = async (subscription, checked) => {
+            if (checked && !subscription.first_payment_date) {
+                showError(new Error('请先填写续订时间，再打开订阅开关'));
+                return;
+            }
+            try {
+                await saveSubscription(subscription, { is_active: checked ? 1 : 0 }, checked ? '订阅已开启自动续订入账' : '订阅已关闭');
+            } catch (error) {
+                showError(error);
+            }
+        };
+
+        const updateSubscriptionRenewalDate = async (subscription, renewalDate) => {
+            if (!renewalDate) {
+                showError(new Error('续订时间不能为空'));
+                return;
+            }
+            try {
+                await saveSubscription(subscription, { first_payment_date: renewalDate }, '续订时间已更新');
+            } catch (error) {
+                showError(error);
+            }
+        };
+
+        const exportJSON = async () => {
+            const blob = new Blob([JSON.stringify(allData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'finance_backup_' + today() + '.json';
+            a.click();
+            URL.revokeObjectURL(url);
+        };
+
+        const exportCSV = async () => {
+            let csv = 'Date,Category,Name,Amount\n';
+            (allData.ledger_items || []).forEach(i => {
+                csv += [
+                    escapeCsvValue(i.date),
+                    escapeCsvValue(i.category),
+                    escapeCsvValue(i.name),
+                    escapeCsvValue(i.amount),
+                ].join(',') + '\n';
+            });
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'ledger_' + today() + '.csv';
+            a.click();
+            URL.revokeObjectURL(url);
+        };
+
+        const saveAISettings = async () => {
+            setSavingAISettings(true);
+            try {
+                const res = await api.put('/api/ai-settings', {
+                    provider: aiSettings.provider,
+                    endpointUrl: aiSettings.endpointUrl,
+                    model: aiSettings.model,
+                    apiKey: aiSettings.apiKey,
+                });
+                setAiSettings({
+                    provider: res.provider,
+                    endpointUrl: res.endpointUrl,
+                    model: res.model,
+                    apiKey: '',
+                    hasApiKey: !!res.hasApiKey,
+                    updatedAt: res.updatedAt || null,
+                });
+                setShowAISettings(false);
+                showSuccess('AI 设置已保存');
+            } catch (error) {
+                showError(error);
+            }
+            setSavingAISettings(false);
+        };
+
+        const openAIAnalysis = async () => {
+            if (!aiSettings.hasApiKey) {
+                setShowAISettings(true);
+                showError(new Error('请先配置 AI API Key'));
+                return;
+            }
+            const payload = statsMode === 'day'
+                ? { scope: 'day', date: currentDate }
+                : statsMode === 'month'
+                    ? { scope: 'month', month: currentMonth }
+                    : { scope: 'year', year: Number(currentYear) };
+
+            setAiAnalysis({ open: true, loading: true, error: '', result: null });
+            try {
+                const result = await api.post('/api/ai-analysis', payload);
+                setAiAnalysis({ open: true, loading: false, error: '', result });
+            } catch (error) {
+                setAiAnalysis({ open: true, loading: false, error: error.message, result: null });
+            }
+        };
+
+        const handleImport = async () => {
+            const text = document.getElementById('importArea').value;
+            const trimmed = text.trim();
+            const items = trimmed
+                ? trimmed.split('\n').map(line => {
+                    const [d, c, n, a] = line.split(',').map(s => s.trim());
+                    return (d && a) ? { date: d, category: c, name: n, amount: parseFloat(a) } : null;
+                }).filter(Boolean)
+                : [];
+            try {
+                await api.post('/api/ledger/import', { items });
+                document.getElementById('importArea').value = '';
+                await refreshAll('导入成功');
+            } catch (error) {
+                showError(error);
+            }
+        };
+
+        const dayTotal = dayLedger.reduce((sum, item) => sum + safeNumber(item.amount), 0);
+        const monthTotal = monthLedger.reduce((sum, item) => sum + safeNumber(item.amount), 0);
+        const monthAveragePerDay = monthLedger.length ? monthTotal / new Set(monthLedger.map(item => item.date)).size : 0;
+        const monthRankingToShow = showMonthRankingAll ? monthRanking : monthRanking.slice(0, 10);
+        const yearRankingToShow = showYearRankingAll ? yearRanking : yearRanking.slice(0, 10);
+
+        if (!token) return <Auth onLogin={() => setToken(localStorage.getItem('token'))} />;
+        if (loading) return <div className="flex justify-center items-center h-screen text-blue-500">加载中...</div>;
+
+        return (
+            <div className="max-w-4xl mx-auto p-4 pb-24 md:pb-10">
+                <div className="flex justify-between items-start mb-6 gap-3">
+                    <div>
+                        <h1 className="text-xl font-black text-gray-800 tracking-tight">财务指挥中心</h1>
+                        <p className="text-xs text-gray-400">{currentMonth}</p>
+                        <p className="text-xs text-gray-400 mt-1">最近刷新：{refreshTime || '未刷新'}（北京时间）</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <DataMenu onExportJSON={exportJSON} onExportCSV={exportCSV} onOpenAISettings={() => setShowAISettings(true)} />
+                        <input type="month" className="bg-white border rounded px-2 py-1 text-sm" value={currentMonth} onChange={e => setCurrentMonth(e.target.value)} />
+                        <button onClick={() => { localStorage.removeItem('token'); api.token = ''; setToken(null); }} className="p-2 text-gray-400 hover:text-red-500"><i data-lucide="log-out" className="w-5 h-5"></i></button>
+                    </div>
+                </div>
+
+                <Notice notice={notice} />
+
+                <div className="bg-white p-1 rounded-xl shadow-sm flex mb-6 overflow-x-auto">
+                    {['dashboard', 'subs', 'ledger', 'stats'].map(t => (
+                        <button key={t} onClick={() => setActiveTab(t)} className={'flex-1 py-2 px-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ' + (activeTab === t ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:bg-gray-50')}>
+                            {t === 'dashboard' ? '仪表盘' : t === 'subs' ? '订阅/连载' : t === 'ledger' ? '账单明细' : '统计'}
+                        </button>
+                    ))}
+                </div>
+
+                {activeTab === 'dashboard' && (
+                    <div className="space-y-4 animate-fade-in">
+                        {subStats.warnings.length > 0 && (
+                            <div className="bg-red-50 p-4 rounded-xl border border-red-100 flex items-start gap-3">
+                                <div className="bg-red-100 p-2 rounded-full text-red-600"><i data-lucide="alert-triangle" className="w-5 h-5"></i></div>
+                                <div>
+                                    <h3 className="font-bold text-red-800">现金流警告</h3>
+                                    <div className="text-sm text-red-600 mt-1">
+                                        {subStats.warnings.map(s => <div key={s.id}>{s.name} 本月需扣款 <b>¥{formatMoney(s.price)}</b></div>)}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div className="card border-t-4 border-blue-500">
+                                <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">本月预算</div>
+                                <div className="flex items-baseline mt-2">
+                                    <span className="text-2xl font-bold">¥</span>
+                                    <input
+                                        type="number"
+                                        className="text-3xl font-black w-full outline-none"
+                                        value={data.budget}
+                                        onBlur={e => api.post('/api/budget', { month: currentMonth, amount: parseFloat(e.target.value || '0') }).then(() => refreshAll('预算已保存')).catch(showError)}
+                                        onChange={e => setData({ ...data, budget: e.target.value })}
+                                    />
+                                </div>
+                            </div>
+                            <div className="card border-t-4 border-yellow-500">
+                                <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">预期消费</div>
+                                <div className="mt-2 text-3xl font-black">¥{formatMoney(subStats.cost + plannedSerialCost, 0)}</div>
+                                <div className="text-xs text-gray-400 mt-1">订阅 {formatMoney(subStats.cost, 0)} + 连载 {formatMoney(plannedSerialCost, 0)}</div>
+                                <div className="text-xs text-gray-400 mt-1">
+                                    已计入订阅：{formatMoney(actualSubscriptionLedger.reduce((sum, item) => sum + safeNumber(item.amount), 0), 0)}/{formatMoney(subStats.cost, 0)}
+                                </div>
+                            </div>
+                            <div className={'card border-t-4 ' + (actual.total > data.budget ? 'border-red-500' : 'border-green-500')}>
+                                <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">实际支出</div>
+                                <div className={'mt-2 text-3xl font-black ' + (actual.total > data.budget ? 'text-red-600' : 'text-green-600')}>¥{formatMoney(actual.total, 0)}</div>
+                                <div className="text-xs text-gray-400 mt-1">{actual.total > data.budget ? '已超支' : '安全范围'}</div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {activeTab === 'subs' && (
+                    <div className="space-y-6">
+                        <div className="card">
+                            <div className="flex justify-between items-center mb-4">
+                                <h2 className="font-bold text-lg">📦 连载追更</h2>
+                                <button onClick={() => {
+                                    const name = prompt('名称'); if (!name) return;
+                                    api.post('/api/serials', { name, price: 0, status: 'planned', expected_release_date: currentMonth }).then(() => refreshAll('连载已新增')).catch(showError);
+                                }} className="btn btn-primary text-xs">+ 新增</button>
+                            </div>
+                            <div className="space-y-3">
+                                {data.serials.map(s => (
+                                    <div key={s.id} className="flex justify-between items-center py-2 border-b last:border-0 border-gray-100">
+                                        <div>
+                                            <div className="font-medium">{s.name}</div>
+                                            <div className="text-xs text-gray-400">{s.expected_release_date} · {SERIAL_STATUS_LABELS[s.status] || s.status}</div>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                            <div className="font-bold">¥{formatMoney(s.price)}</div>
+                                            {s.status !== 'paid' && <button onClick={() => setAdvancingSerial(s)} className="text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded-full font-medium hover:bg-blue-100">结算本期</button>}
+                                            <button onClick={() => confirm('删?') && api.delete('/api/serials/' + s.id).then(() => refreshAll('连载已删除')).catch(showError)} className="text-gray-300 hover:text-red-500"><i data-lucide="trash-2" className="w-4 h-4"></i></button>
+                                        </div>
+                                    </div>
+                                ))}
+                                {data.serials.length === 0 && <p className="text-center text-gray-300 py-4">无追更计划</p>}
+                            </div>
+                        </div>
+
+                        <div className="card">
+                            <div className="flex justify-between items-center mb-4">
+                                <h2 className="font-bold text-lg">📅 固定订阅</h2>
+                                <button onClick={() => {
+                                    const name = prompt('名称'); if (!name) return;
+                                    const price = prompt('金额');
+                                    if (price === null) return;
+                                    const cycle = prompt('周期 (monthly/yearly/quarterly)', 'monthly');
+                                    if (!cycle) return;
+                                    const renewalDate = prompt('续订时间 (YYYY-MM-DD)', today());
+                                    if (!renewalDate) return;
+                                    api.post('/api/subscriptions', { name, price, cycle_type: cycle, first_payment_date: renewalDate, is_active: 1 }).then(() => refreshAll('订阅已新增')).catch(showError);
+                                }} className="btn btn-ghost text-xs border">+ 新增</button>
+                            </div>
+                            {data.subscriptions.map(s => (
+                                <div key={s.id} className="py-3 border-b last:border-0 border-gray-100">
+                                    <div className="flex justify-between items-start gap-3">
+                                        <div>
+                                            <div className="font-medium">{s.name}</div>
+                                            <div className="text-xs text-gray-400 mt-1">{s.cycle_type} · 续订 {s.first_payment_date || '未设置'}</div>
+                                            <div className="text-xs mt-2 inline-flex items-center px-2 py-1 rounded-full bg-gray-50 text-gray-500 border border-gray-200">
+                                                {Number(s.is_active) ? '订阅中' : '未订阅'}
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                            <div className="font-bold">¥{formatMoney(s.price)}</div>
+                                            <button onClick={() => confirm('删?') && api.delete('/api/subscriptions/' + s.id).then(() => refreshAll('订阅已删除')).catch(showError)} className="text-gray-300 hover:text-red-500"><i data-lucide="trash-2" className="w-4 h-4"></i></button>
+                                        </div>
+                                    </div>
+                                    <div className="mt-3 flex flex-col md:flex-row md:items-center gap-3">
+                                        <label className="flex items-center gap-2 text-sm text-gray-600">
+                                            <span>续订时间</span>
+                                            <input
+                                                type="date"
+                                                className="input text-sm py-1.5"
+                                                value={s.first_payment_date || ''}
+                                                onChange={e => {
+                                                    const renewalDate = e.target.value;
+                                                    if (!renewalDate) return;
+                                                    updateSubscriptionRenewalDate(s, renewalDate);
+                                                }}
+                                            />
+                                        </label>
+                                        <label className="flex items-center gap-3 text-sm text-gray-600">
+                                            <span>订阅开关</span>
+                                            <button
+                                                type="button"
+                                                onClick={() => toggleSubscription(s, !Number(s.is_active))}
+                                                className={'relative inline-flex h-7 w-12 items-center rounded-full transition-colors ' + (Number(s.is_active) ? 'bg-blue-600' : 'bg-gray-300')}
+                                            >
+                                                <span className={'inline-block h-5 w-5 transform rounded-full bg-white transition-transform ' + (Number(s.is_active) ? 'translate-x-6' : 'translate-x-1')}></span>
+                                            </button>
+                                            <span className="text-xs text-gray-400">
+                                                {s.cycle_type === 'monthly'
+                                                    ? '开启后每月续订日自动记入实际账单'
+                                                    : s.cycle_type === 'yearly'
+                                                        ? '开启后继续在仪表盘提醒年度大额消费'
+                                                        : '开启后参与预期消费计算'}
+                                            </span>
+                                        </label>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {activeTab === 'stats' && (
+                    <div className="space-y-4 animate-fade-in">
+                        <div className="card">
+                            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                                <div>
+                                    <h2 className="font-bold text-lg">📊 统计中心</h2>
+                                    <p className="text-xs text-gray-400 mt-1">在这里切换日 / 月 / 年视图，并可发起 AI 分析。</p>
+                                </div>
+                                <button onClick={openAIAnalysis} className="btn btn-primary text-sm">🤖 AI 分析当前{statsMode === 'day' ? '日' : statsMode === 'month' ? '月' : '年'}支出</button>
+                            </div>
+
+                            <div className="bg-gray-100 rounded-xl p-1 flex gap-2 mt-4">
+                                {[
+                                    ['day', '按日'],
+                                    ['month', '按月'],
+                                    ['year', '按年'],
+                                ].map(([key, label]) => (
+                                    <button key={key} onClick={() => setStatsMode(key)} className={'flex-1 py-2 rounded-lg text-sm font-medium ' + (statsMode === key ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500')}>
+                                        {label}
+                                    </button>
+                                ))}
+                            </div>
+
+                            <div className="mt-4">
+                                {statsMode === 'day' && <input type="date" className="input max-w-xs" value={currentDate} onChange={e => setCurrentDate(e.target.value)} />}
+                                {statsMode === 'month' && <input type="month" className="input max-w-xs" value={currentMonth} onChange={e => setCurrentMonth(e.target.value)} />}
+                                {statsMode === 'year' && <input type="number" className="input max-w-xs" min="2000" max="9999" value={currentYear} onChange={e => setCurrentYear(e.target.value.slice(0, 4))} />}
+                            </div>
+                        </div>
+
+                        {statsMode === 'day' && (
+                            <>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <div className="card border-t-4 border-blue-500">
+                                        <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">当日支出</div>
+                                        <div className="mt-2 text-3xl font-black">¥{formatMoney(dayTotal, 2)}</div>
+                                        <div className="text-xs text-gray-400 mt-1">{currentDate}</div>
+                                    </div>
+                                    <div className="card border-t-4 border-purple-500">
+                                        <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">当日笔数</div>
+                                        <div className="mt-2 text-3xl font-black">{dayLedger.length}</div>
+                                        <div className="text-xs text-gray-400 mt-1">北京时间</div>
+                                    </div>
+                                    <div className="card border-t-4 border-green-500">
+                                        <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">当日订阅支出</div>
+                                        <div className="mt-2 text-3xl font-black">¥{formatMoney(dayBreakdown.subscription, 2)}</div>
+                                        <div className="text-xs text-gray-400 mt-1">仅统计已入账订阅</div>
+                                    </div>
+                                </div>
+
+                                <div className="card">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h3 className="font-bold text-lg">🏅 当日支出排行</h3>
+                                        <span className="text-xs text-gray-400">按名称聚合</span>
+                                    </div>
+                                    <div className="space-y-3">
+                                        {dayRanking.length === 0 && <p className="text-center text-gray-300 py-4">当天暂无支出记录</p>}
+                                        {dayRanking.map((item, index) => (
+                                            <div key={`${item.category}-${item.name}`} className="flex items-center justify-between py-2 border-b last:border-0 border-gray-100">
+                                                <div className="flex items-center gap-3">
+                                                    <span className="w-7 h-7 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center text-xs font-bold">{index + 1}</span>
+                                                    <div>
+                                                        <div className="font-medium">{item.name}</div>
+                                                        <div className="text-xs text-gray-400">{CATEGORIES[item.category] || item.category} · {item.count}笔</div>
+                                                    </div>
+                                                </div>
+                                                <div className="font-bold">¥{formatMoney(item.total, 2)}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div className="card">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h3 className="font-bold text-lg">🧾 当日记录</h3>
+                                        <span className="text-xs text-gray-400">可修改支出类型、金额、名称</span>
+                                    </div>
+                                    <div className="space-y-3">
+                                        {dayLedger.length === 0 && <p className="text-center text-gray-300 py-4">当天暂无记录</p>}
+                                        {dayLedger.sort((a, b) => safeNumber(b.amount) - safeNumber(a.amount)).map(item => (
+                                            <div key={item.id} className="flex justify-between items-center py-2 border-b last:border-0 border-gray-100">
+                                                <div>
+                                                    <div className="font-medium">{item.name}</div>
+                                                    <div className="text-xs text-gray-400">{CATEGORIES[item.category] || item.category}</div>
+                                                </div>
+                                                <div className="flex items-center gap-3">
+                                                    <div className="font-bold">¥{formatMoney(item.amount, 2)}</div>
+                                                    <button onClick={() => setEditingLedgerItem(item)} className="text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded-full font-medium hover:bg-blue-100">编辑</button>
+                                                    <button onClick={() => deleteLedgerItem(item.id)} className="text-gray-300 hover:text-red-500"><i data-lucide="trash-2" className="w-4 h-4"></i></button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </>
+                        )}
+
+                        {statsMode === 'month' && (
+                            <>
+                                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                    <div className="card border-t-4 border-blue-500">
+                                        <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">本月支出</div>
+                                        <div className="mt-2 text-3xl font-black">¥{formatMoney(monthTotal, 2)}</div>
+                                        <div className="text-xs text-gray-400 mt-1">{currentMonth}</div>
+                                    </div>
+                                    <div className="card border-t-4 border-yellow-500">
+                                        <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">预算</div>
+                                        <div className="mt-2 text-3xl font-black">¥{formatMoney(monthBudget, 2)}</div>
+                                        <div className="text-xs text-gray-400 mt-1">{monthTotal > monthBudget ? '已超支' : '预算内'}</div>
+                                    </div>
+                                    <div className="card border-t-4 border-purple-500">
+                                        <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">日均支出</div>
+                                        <div className="mt-2 text-3xl font-black">¥{formatMoney(monthAveragePerDay, 2)}</div>
+                                        <div className="text-xs text-gray-400 mt-1">按有支出日期平均</div>
+                                    </div>
+                                    <div className="card border-t-4 border-green-500">
+                                        <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">预计影响</div>
+                                        <div className="mt-2 text-3xl font-black">¥{formatMoney(subStats.cost + plannedSerialCost, 2)}</div>
+                                        <div className="text-xs text-gray-400 mt-1">订阅 + 连载计划</div>
+                                    </div>
+                                </div>
+
+                                <div className="card">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h3 className="font-bold text-lg">📎 本月分类统计</h3>
+                                        <span className="text-xs text-gray-400">仅按已入账支出统计</span>
+                                    </div>
+                                    <div className="space-y-4">
+                                        {Object.entries(CATEGORIES).map(([key, label]) => {
+                                            const amount = monthBreakdown[key] || 0;
+                                            const percent = monthTotal > 0 ? (amount / monthTotal * 100).toFixed(1) : '0.0';
+                                            return (
+                                                <div key={key}>
+                                                    <div className="flex justify-between items-center mb-1">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-xl">{CAT_ICONS[key]}</span>
+                                                            <span className="font-medium text-gray-700">{label}</span>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <div className="font-bold">¥{formatMoney(amount, 2)}</div>
+                                                            <div className="text-xs text-gray-400">{percent}%</div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
+                                                        <div className="h-full bg-blue-500 rounded-full" style={{ width: percent + '%' }}></div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+
+                                <div className="card">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h3 className="font-bold text-lg">🏅 当月支出排行</h3>
+                                        {monthRanking.length > 10 && (
+                                            <button onClick={() => setShowMonthRankingAll(!showMonthRankingAll)} className="text-xs text-blue-600 font-medium">
+                                                {showMonthRankingAll ? '收起' : '展开全部'}
+                                            </button>
+                                        )}
+                                    </div>
+                                    <div className="space-y-3">
+                                        {monthRanking.length === 0 && <p className="text-center text-gray-300 py-4">本月暂无支出排行</p>}
+                                        {monthRankingToShow.map((item, index) => (
+                                            <div key={`${item.category}-${item.name}`} className="flex items-center justify-between py-2 border-b last:border-0 border-gray-100">
+                                                <div className="flex items-center gap-3">
+                                                    <span className="w-7 h-7 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center text-xs font-bold">{index + 1}</span>
+                                                    <div>
+                                                        <div className="font-medium">{item.name}</div>
+                                                        <div className="text-xs text-gray-400">{CATEGORIES[item.category] || item.category} · {item.count}笔</div>
+                                                    </div>
+                                                </div>
+                                                <div className="font-bold">¥{formatMoney(item.total, 2)}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </>
+                        )}
+
+                        {statsMode === 'year' && (
+                            <>
+                                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                    <div className="card border-t-4 border-blue-500">
+                                        <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">年度总支出</div>
+                                        <div className="mt-2 text-3xl font-black">¥{formatMoney(yearTotal, 2)}</div>
+                                        <div className="text-xs text-gray-400 mt-1">{currentYear} 年</div>
+                                    </div>
+                                    <div className="card border-t-4 border-yellow-500">
+                                        <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">月均支出</div>
+                                        <div className="mt-2 text-3xl font-black">¥{formatMoney(yearTotal / 12, 2)}</div>
+                                        <div className="text-xs text-gray-400 mt-1">按 12 个月平均</div>
+                                    </div>
+                                    <div className="card border-t-4 border-purple-500">
+                                        <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">最高支出月份</div>
+                                        <div className="mt-2 text-2xl font-black">{maxYearMonth ? maxYearMonth.month : '--'}</div>
+                                        <div className="text-xs text-gray-400 mt-1">{maxYearMonth ? `¥${formatMoney(maxYearMonth.total, 2)}` : '暂无数据'}</div>
+                                    </div>
+                                    <div className="card border-t-4 border-green-500">
+                                        <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">年度笔数</div>
+                                        <div className="mt-2 text-3xl font-black">{yearLedger.length}</div>
+                                        <div className="text-xs text-gray-400 mt-1">已入账记录</div>
+                                    </div>
+                                </div>
+
+                                <div className="card">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h3 className="font-bold text-lg">🗓️ 年度月度支出</h3>
+                                        <span className="text-xs text-gray-400">按月份汇总</span>
+                                    </div>
+                                    <div className="space-y-3">
+                                        {yearMonthlyTotals.length === 0 && <p className="text-center text-gray-300 py-4">本年度暂无支出</p>}
+                                        {yearMonthlyTotals.map(item => {
+                                            const percent = maxYearMonth && maxYearMonth.total > 0 ? (item.total / maxYearMonth.total * 100).toFixed(1) : '0.0';
+                                            return (
+                                                <div key={item.month}>
+                                                    <div className="flex justify-between items-center mb-1">
+                                                        <div className="font-medium text-gray-700">{item.month}</div>
+                                                        <div className="text-right">
+                                                            <div className="font-bold">¥{formatMoney(item.total, 2)}</div>
+                                                            <div className="text-xs text-gray-400">{percent}%</div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
+                                                        <div className="h-full bg-blue-500 rounded-full" style={{ width: percent + '%' }}></div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+
+                                <div className="card">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h3 className="font-bold text-lg">🏅 年度支出排行</h3>
+                                        {yearRanking.length > 10 && (
+                                            <button onClick={() => setShowYearRankingAll(!showYearRankingAll)} className="text-xs text-blue-600 font-medium">
+                                                {showYearRankingAll ? '收起' : '展开全部'}
+                                            </button>
+                                        )}
+                                    </div>
+                                    <div className="space-y-3">
+                                        {yearRanking.length === 0 && <p className="text-center text-gray-300 py-4">本年度暂无排行</p>}
+                                        {yearRankingToShow.map((item, index) => (
+                                            <div key={`${item.category}-${item.name}`} className="flex items-center justify-between py-2 border-b last:border-0 border-gray-100">
+                                                <div className="flex items-center gap-3">
+                                                    <span className="w-7 h-7 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center text-xs font-bold">{index + 1}</span>
+                                                    <div>
+                                                        <div className="font-medium">{item.name}</div>
+                                                        <div className="text-xs text-gray-400">{CATEGORIES[item.category] || item.category} · {item.count}笔</div>
+                                                    </div>
+                                                </div>
+                                                <div className="font-bold">¥{formatMoney(item.total, 2)}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div className="card">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h3 className="font-bold text-lg">📎 年度分类统计</h3>
+                                        <span className="text-xs text-gray-400">按已入账支出汇总</span>
+                                    </div>
+                                    <div className="space-y-4">
+                                        {Object.entries(CATEGORIES).map(([key, label]) => {
+                                            const amount = yearBreakdown[key] || 0;
+                                            const percent = yearTotal > 0 ? (amount / yearTotal * 100).toFixed(1) : '0.0';
+                                            return (
+                                                <div key={key}>
+                                                    <div className="flex justify-between items-center mb-1">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-xl">{CAT_ICONS[key]}</span>
+                                                            <span className="font-medium text-gray-700">{label}</span>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <div className="font-bold">¥{formatMoney(amount, 2)}</div>
+                                                            <div className="text-xs text-gray-400">{percent}%</div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
+                                                        <div className="h-full bg-blue-500 rounded-full" style={{ width: percent + '%' }}></div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                )}
+
+                {activeTab === 'ledger' && (
+                    <div className="space-y-6">
+                        {groupedLedger.map(([date, items]) => {
+                            const dailyTotal = items.reduce((sum, i) => sum + safeNumber(i.amount), 0);
+                            return (
+                                <div key={date} className="bg-white p-4 rounded-xl shadow-sm">
+                                    <div className="flex justify-between items-center mb-3 pb-2 border-b border-gray-100">
+                                        <span className="font-bold text-gray-700 flex items-center gap-2">
+                                            <i data-lucide="calendar" className="w-4 h-4 text-gray-400"></i>
+                                            {date}
+                                        </span>
+                                        <span className="font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded text-sm">¥{formatMoney(dailyTotal, 2)}</span>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {items.map(item => (
+                                            <span key={item.id} className="inline-flex items-center gap-2 bg-gray-50 border border-gray-200 px-3 py-1.5 rounded-lg text-sm hover:bg-gray-100 transition-colors">
+                                                <span className="text-lg leading-none">{CAT_ICONS[item.category] || '💰'}</span>
+                                                <span className="font-medium text-gray-700">{item.name}</span>
+                                                <span className="text-gray-400 font-mono text-xs">¥{formatMoney(item.amount, 2)}</span>
+                                                <button onClick={() => setEditingLedgerItem(item)} className="text-blue-500 text-xs">编辑</button>
+                                                <button onClick={() => deleteLedgerItem(item.id)} className="ml-1 text-gray-300 hover:text-red-500 text-lg leading-none focus:outline-none">&times;</button>
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
+                            );
+                        })}
+
+                        {data.ledger.length === 0 && (
+                            <div className="text-center py-10 text-gray-400">
+                                <div className="text-4xl mb-2">🍃</div>
+                                本月暂无账单
+                            </div>
+                        )}
+
+                        <div className="bg-white p-5 rounded-xl shadow-sm mt-8 border border-dashed border-gray-300">
+                            <h3 className="text-xs font-bold text-gray-400 uppercase mb-2">批量导入</h3>
+                            <textarea id="importArea" className="input text-xs font-mono h-20" placeholder={'格式: 2026-04-01, food, 午餐, 20\n换行分隔'}></textarea>
+                            <button onClick={handleImport} className="btn btn-ghost text-xs w-full mt-2">导入 CSV 文本</button>
+                        </div>
+                    </div>
+                )}
+
+                <div className="fab">
+                    <button onClick={() => setShowQuickAdd(true)} className="fab-btn">
+                        <i data-lucide="plus"></i>
+                    </button>
+                </div>
+
+                {showQuickAdd && <QuickAdd onClose={() => setShowQuickAdd(false)} onSave={handleQuickAdd} />}
+                {advancingSerial && <SerialAdvance serial={advancingSerial} onClose={() => setAdvancingSerial(null)} onConfirm={handleAdvanceSerial} />}
+                {editingLedgerItem && <EditLedgerModal item={editingLedgerItem} onClose={() => setEditingLedgerItem(null)} onSave={updateLedgerItem} />}
+                {showAISettings && <AISettingsModal settings={aiSettings} saving={savingAISettings} onClose={() => setShowAISettings(false)} onChange={(key, value) => setAiSettings({ ...aiSettings, [key]: value })} onSave={saveAISettings} />}
+                {aiAnalysis.open && <AIAnalysisModal state={aiAnalysis} scopeLabel={statsMode === 'day' ? currentDate : statsMode === 'month' ? currentMonth : currentYear + ' 年'} onClose={() => setAiAnalysis({ open: false, loading: false, error: '', result: null })} />}
             </div>
-            <div class="list-actions">
-              <strong>¥${formatMoney(serial.price)}</strong>
-              ${serial.status !== 'paid' ? `<button class="secondary-btn small" type="button" data-action="open-advance" data-id="${serial.id}">结算本期</button>` : ''}
-              <button class="icon-btn" type="button" data-action="delete-item" data-table="serials" data-id="${serial.id}">删除</button>
-            </div>
-          </article>
-        `).join('')}
-      </div>
-    </section>
-  `;
-}
-
-function renderSubscriptions() {
-  return `
-    <section class="card">
-      <div class="section-header">
-        <div>
-          <h2>📅 固定订阅</h2>
-          <p class="muted">继续兼容 monthly / yearly / quarterly。</p>
-        </div>
-        <button class="secondary-btn small" type="button" data-action="add-subscription">+ 新增</button>
-      </div>
-      <div class="list">
-        ${state.data.subscriptions.length === 0 ? '<p class="empty-state">暂无固定订阅</p>' : state.data.subscriptions.map((subscription) => `
-          <article class="list-item">
-            <div>
-              <div class="list-title">${escapeHtml(subscription.name)}</div>
-              <div class="muted">${escapeHtml(subscription.cycle_type)}</div>
-            </div>
-            <div class="list-actions">
-              <strong>¥${formatMoney(subscription.price)}</strong>
-              <button class="icon-btn" type="button" data-action="delete-item" data-table="subscriptions" data-id="${subscription.id}">删除</button>
-            </div>
-          </article>
-        `).join('')}
-      </div>
-    </section>
-  `;
-}
-
-function renderSubsTab() {
-  return `
-    <section class="stack">
-      ${renderSerials()}
-      ${renderSubscriptions()}
-    </section>
-  `;
-}
-
-function renderLedgerTab(stats) {
-  const grouped = groupLedgerByDate(state.data.ledger);
-
-  return `
-    <section class="stack">
-      ${grouped.length === 0 ? `
-        <article class="card empty-panel">
-          <div class="empty-mark">🍃</div>
-          <p>本月暂无账单</p>
-        </article>
-      ` : grouped.map(([date, items]) => `
-        <article class="card">
-          <div class="section-header compact">
-            <h2>${escapeHtml(date)}</h2>
-            <strong>¥${formatMoney(items.reduce((sum, item) => sum + Number(item.amount || 0), 0))}</strong>
-          </div>
-          <div class="chip-list">
-            ${items.map((item) => `
-              <div class="chip">
-                <span>${escapeHtml(CATEGORY_ICONS[item.category] || '💰')}</span>
-                <span>${escapeHtml(item.name)}</span>
-                <strong>¥${formatMoney(item.amount)}</strong>
-                <button class="icon-btn danger-text" type="button" data-action="delete-item" data-table="ledger_items" data-id="${item.id}">×</button>
-              </div>
-            `).join('')}
-          </div>
-        </article>
-      `).join('')}
-      <article class="card">
-        <div class="section-header">
-          <div>
-            <h2>批量导入</h2>
-            <p class="muted">格式：日期, 分类, 名称, 金额</p>
-          </div>
-          <span class="pill">本月支出 ¥${formatMoney(stats.actual.total)}</span>
-        </div>
-        <form id="import-form" class="stack">
-          <textarea name="content" rows="6" placeholder="2026-04-01, food, 午餐, 20&#10;2026-04-02, shopping, 手办, 199"></textarea>
-          <button class="secondary-btn" type="submit">导入 CSV 文本</button>
-        </form>
-      </article>
-    </section>
-  `;
-}
-
-function renderStatsTab(stats) {
-  return `
-    <article class="card">
-      <div class="section-header">
-        <div>
-          <h2>📊 本月统计</h2>
-          <p class="muted">${escapeHtml(state.currentMonth)}</p>
-        </div>
-        <strong class="hero-value small">¥${formatMoney(stats.actual.total)}</strong>
-      </div>
-      <div class="stack">
-        ${Object.entries(CATEGORIES).map(([key, label]) => {
-          const amount = stats.actual.breakdown[key] || 0;
-          const percent = stats.actual.total > 0 ? (amount / stats.actual.total) * 100 : 0;
-          return `
-            <div class="metric-row">
-              <div class="metric-header">
-                <span>${escapeHtml(CATEGORY_ICONS[key])} ${escapeHtml(label)}</span>
-                <span>¥${formatMoney(amount)} · ${formatMoney(percent)}%</span>
-              </div>
-              <progress max="100" value="${formatMoney(percent)}"></progress>
-            </div>
-          `;
-        }).join('')}
-      </div>
-    </article>
-  `;
-}
-
-function renderQuickAddModal() {
-  if (!state.quickAddOpen) {
-    return '';
-  }
-
-  const categoryOptions = Object.entries(CATEGORIES)
-    .map(([value, label]) => `<option value="${value}">${escapeHtml(CATEGORY_ICONS[value])} ${escapeHtml(label)}</option>`)
-    .join('');
-
-  return `
-    <div class="modal-backdrop">
-      <div class="modal">
-        <div class="section-header">
-          <h2>极速记账</h2>
-          <button class="icon-btn" type="button" data-action="close-quick-add">关闭</button>
-        </div>
-        <form id="quick-add-form" class="stack">
-          <label class="field">
-            <span>金额</span>
-            <input name="amount" type="number" min="0" step="0.01" required autofocus>
-          </label>
-          <label class="field">
-            <span>备注</span>
-            <input name="name" maxlength="160" placeholder="选填，不填会使用分类名">
-          </label>
-          <div class="field-row">
-            <label class="field">
-              <span>日期</span>
-              <input name="date" type="date" value="${today()}" required>
-            </label>
-            <label class="field">
-              <span>分类</span>
-              <select name="category">${categoryOptions}</select>
-            </label>
-          </div>
-          <button class="primary-btn" type="submit">保存记录</button>
-        </form>
-      </div>
-    </div>
-  `;
-}
-
-function renderAdvanceModal() {
-  const serial = getSelectedSerial();
-  if (!serial) {
-    return '';
-  }
-
-  return `
-    <div class="modal-backdrop">
-      <div class="modal">
-        <div class="section-header">
-          <div>
-            <h2>结算并续杯</h2>
-            <p class="muted">${escapeHtml(serial.name)}</p>
-          </div>
-          <button class="icon-btn" type="button" data-action="close-advance">关闭</button>
-        </div>
-        <form id="advance-form" class="stack" data-id="${serial.id}">
-          <div class="panel-group">
-            <div class="panel">
-              <p class="eyebrow">1. 本次消费</p>
-              <label class="field">
-                <span>金额</span>
-                <input name="expenseAmount" type="number" min="0" step="0.01" value="${escapeHtml(String(serial.price || 0))}" required>
-              </label>
-              <label class="field">
-                <span>日期</span>
-                <input name="expenseDate" type="date" value="${today()}" required>
-              </label>
-            </div>
-            <div class="panel accent">
-              <p class="eyebrow">2. 下一期计划</p>
-              <label class="field">
-                <span>名称</span>
-                <input name="nextName" maxlength="120" value="${escapeHtml(getNextName(serial.name))}" required>
-              </label>
-              <div class="field-row">
-                <label class="field">
-                  <span>月份</span>
-                  <input name="nextDate" type="month" value="${escapeHtml(nextMonth())}" required>
-                </label>
-                <label class="field">
-                  <span>预估价</span>
-                  <input name="nextPrice" type="number" min="0" step="0.01" value="${escapeHtml(String(serial.price || 0))}" required>
-                </label>
-              </div>
-            </div>
-          </div>
-          <button class="primary-btn" type="submit">确认结算并更新计划</button>
-        </form>
-      </div>
-    </div>
-  `;
-}
-
-function renderApp() {
-  const stats = buildStats(state.data, state.currentMonth);
-  const selectedTab = state.activeTab === 'dashboard'
-    ? renderDashboard(stats)
-    : state.activeTab === 'subs'
-      ? renderSubsTab()
-      : state.activeTab === 'ledger'
-        ? renderLedgerTab(stats)
-        : renderStatsTab(stats);
-
-  return `
-    <main class="app-shell">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">Finance Command Center</p>
-          <h1>财务指挥中心</h1>
-        </div>
-        <div class="topbar-actions">
-          <input id="month-picker" type="month" value="${escapeHtml(state.currentMonth)}">
-          <button class="secondary-btn small" type="button" data-action="export-json">导出 JSON</button>
-          <button class="secondary-btn small" type="button" data-action="export-csv">导出 CSV</button>
-          <button class="icon-btn" type="button" data-action="logout">退出</button>
-        </div>
-      </header>
-
-      ${renderNotice()}
-
-      <nav class="tab-bar">
-        ${TABS.map((tab) => `
-          <button
-            class="tab-btn ${tab.key === state.activeTab ? 'active' : ''}"
-            type="button"
-            data-action="switch-tab"
-            data-tab="${tab.key}"
-          >
-            ${escapeHtml(tab.label)}
-          </button>
-        `).join('')}
-      </nav>
-
-      ${state.loading ? '<section class="loading-card">加载中...</section>' : selectedTab}
-
-      <button class="fab" type="button" data-action="open-quick-add">＋</button>
-
-      ${renderQuickAddModal()}
-      ${renderAdvanceModal()}
-    </main>
-  `;
-}
-
-function render() {
-  root.innerHTML = state.token ? renderApp() : renderAuth();
-}
-
-function logout(message) {
-  api.setToken('');
-  state.token = '';
-  state.data = { subscriptions: [], serials: [], ledger: [], budget: 0 };
-  state.quickAddOpen = false;
-  state.advanceSerialId = null;
-  if (message) {
-    state.notice = message;
-    state.noticeType = 'info';
-  }
-  render();
-}
-
-async function handleApiError(error) {
-  if (error.status === 401 || error.status === 403) {
-    logout(error.message || '登录状态失效，请重新登录');
-    return;
-  }
-
-  setNotice(error.message || '操作失败，请稍后再试', 'error');
-}
-
-async function fetchData(options = {}) {
-  if (!state.token) {
-    return;
-  }
-
-  state.loading = true;
-  if (!options.preserveNotice) {
-    clearNotice();
-  }
-  render();
-
-  try {
-    const month = encodeURIComponent(state.currentMonth);
-    state.data = await api.get(`/api/data?month=${month}`);
-  } catch (error) {
-    await handleApiError(error);
-  } finally {
-    state.loading = false;
-    render();
-  }
-}
-
-async function exportJson() {
-  try {
-    const allData = await api.get('/api/export/all');
-    api.downloadJson(`finance_backup_${today()}.json`, allData);
-  } catch (error) {
-    await handleApiError(error);
-  }
-}
-
-async function exportCsv() {
-  try {
-    const allData = await api.get('/api/export/all');
-    const lines = [
-      ['Date', 'Category', 'Name', 'Amount'],
-      ...allData.ledger_items.map((item) => [item.date, item.category, item.name, item.amount]),
-    ];
-    const csv = lines.map((line) => line.map(toCsvCell).join(',')).join('\n');
-    api.downloadText(`ledger_${today()}.csv`, csv, 'text/csv;charset=utf-8');
-  } catch (error) {
-    await handleApiError(error);
-  }
-}
-
-async function createSubscription() {
-  const name = window.prompt('名称');
-  if (!name) return;
-
-  const price = window.prompt('金额', '0');
-  if (price === null) return;
-
-  const cycle = window.prompt('周期 (monthly/yearly/quarterly)', 'monthly');
-  if (!cycle) return;
-
-  try {
-    await api.post('/api/subscriptions', {
-      name,
-      price,
-      cycle_type: cycle,
-      first_payment_date: today(),
-    });
-    await fetchData();
-  } catch (error) {
-    await handleApiError(error);
-  }
-}
-
-async function createSerial() {
-  const name = window.prompt('名称');
-  if (!name) return;
-
-  try {
-    await api.post('/api/serials', {
-      name,
-      price: 0,
-      status: 'planned',
-      expected_release_date: state.currentMonth,
-    });
-    await fetchData();
-  } catch (error) {
-    await handleApiError(error);
-  }
-}
-
-async function deleteItem(table, id) {
-  if (!window.confirm('确认删除这条记录吗？')) {
-    return;
-  }
-
-  try {
-    await api.delete(`/api/${table}/${id}`);
-    await fetchData();
-  } catch (error) {
-    await handleApiError(error);
-  }
-}
-
-document.addEventListener('click', async (event) => {
-  const actionTarget = event.target.closest('[data-action]');
-  if (!actionTarget) {
-    return;
-  }
-
-  const { action } = actionTarget.dataset;
-
-  if (action === 'toggle-auth-mode') {
-    state.authMode = state.authMode === 'login' ? 'register' : 'login';
-    state.authError = '';
-    clearNotice();
-    render();
-    return;
-  }
-
-  if (action === 'logout') {
-    logout('已退出登录');
-    return;
-  }
-
-  if (action === 'switch-tab') {
-    state.activeTab = actionTarget.dataset.tab;
-    render();
-    return;
-  }
-
-  if (action === 'export-json') {
-    await exportJson();
-    return;
-  }
-
-  if (action === 'export-csv') {
-    await exportCsv();
-    return;
-  }
-
-  if (action === 'open-quick-add') {
-    state.quickAddOpen = true;
-    render();
-    return;
-  }
-
-  if (action === 'close-quick-add') {
-    state.quickAddOpen = false;
-    render();
-    return;
-  }
-
-  if (action === 'add-subscription') {
-    await createSubscription();
-    return;
-  }
-
-  if (action === 'add-serial') {
-    await createSerial();
-    return;
-  }
-
-  if (action === 'delete-item') {
-    await deleteItem(actionTarget.dataset.table, actionTarget.dataset.id);
-    return;
-  }
-
-  if (action === 'open-advance') {
-    state.advanceSerialId = Number(actionTarget.dataset.id);
-    render();
-    return;
-  }
-
-  if (action === 'close-advance') {
-    state.advanceSerialId = null;
-    render();
-  }
-});
-
-document.addEventListener('change', async (event) => {
-  if (event.target.id === 'month-picker') {
-    state.currentMonth = event.target.value;
-    await fetchData();
-  }
-});
-
-document.addEventListener('submit', async (event) => {
-  event.preventDefault();
-
-  if (event.target.id === 'auth-form') {
-    const formData = new FormData(event.target);
-    const payload = {
-      username: String(formData.get('username') || ''),
-      password: String(formData.get('password') || ''),
-    };
-
-    if (state.authMode === 'register') {
-      payload.inviteCode = String(formData.get('inviteCode') || '');
+        );
     }
 
-    try {
-      state.authError = '';
-      clearNotice();
-      const result = await fetch(state.authMode === 'login' ? '/api/login' : '/api/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await result.json();
-
-      if (!result.ok) {
-        state.authError = data.error || '操作失败';
-        render();
-        return;
-      }
-
-      if (state.authMode === 'register') {
-        state.authMode = 'login';
-        state.authError = '';
-        state.notice = '注册成功，请登录';
-        state.noticeType = 'success';
-        render();
-        return;
-      }
-
-      api.setToken(data.token);
-      state.token = data.token;
-      await fetchData();
-    } catch (_error) {
-      state.authError = '网络异常，请稍后重试';
-      render();
-    }
-
-    return;
-  }
-
-  if (event.target.id === 'budget-form') {
-    const amount = new FormData(event.target).get('amount');
-
-    try {
-      await api.post('/api/budget', {
-        month: state.currentMonth,
-        amount: amount === '' ? 0 : Number(amount),
-      });
-      setNotice('预算已保存', 'success');
-      await fetchData({ preserveNotice: true });
-    } catch (error) {
-      await handleApiError(error);
-    }
-    return;
-  }
-
-  if (event.target.id === 'quick-add-form') {
-    const formData = new FormData(event.target);
-    const category = String(formData.get('category') || 'shopping');
-
-    try {
-      await api.post('/api/ledger_items', {
-        date: String(formData.get('date') || today()),
-        category,
-        name: String(formData.get('name') || '').trim() || CATEGORIES[category],
-        amount: Number(formData.get('amount')),
-      });
-      state.quickAddOpen = false;
-      await fetchData();
-    } catch (error) {
-      await handleApiError(error);
-    }
-    return;
-  }
-
-  if (event.target.id === 'advance-form') {
-    const formData = new FormData(event.target);
-    const serial = getSelectedSerial();
-
-    if (!serial) {
-      return;
-    }
-
-    try {
-      await api.post(`/api/serials/${serial.id}/advance`, {
-        expense: {
-          date: String(formData.get('expenseDate')),
-          category: 'shopping',
-          name: `${serial.name} (已付)`,
-          amount: Number(formData.get('expenseAmount')),
-        },
-        next: {
-          name: String(formData.get('nextName')),
-          price: Number(formData.get('nextPrice')),
-          date: String(formData.get('nextDate')),
-        },
-      });
-      state.advanceSerialId = null;
-      await fetchData();
-    } catch (error) {
-      await handleApiError(error);
-    }
-    return;
-  }
-
-  if (event.target.id === 'import-form') {
-    const content = String(new FormData(event.target).get('content') || '').trim();
-    const items = content
-      ? content.split('\n').map((line) => {
-        const [date, category, name, amount] = line.split(',').map((value) => value?.trim() || '');
-        return { date, category, name, amount: Number(amount) };
-      }).filter((item) => item.date && item.name)
-      : [];
-
-    try {
-      await api.post('/api/ledger/import', { items });
-      setNotice(`已导入 ${items.length} 条记录`, 'success');
-      event.target.reset();
-      await fetchData({ preserveNotice: true });
-    } catch (error) {
-      await handleApiError(error);
-    }
-  }
-});
-
-render();
-
-if (state.token) {
-  fetchData();
-}
+    const root = createRoot(document.getElementById('root'));
+    root.render(<App />);
+})();
