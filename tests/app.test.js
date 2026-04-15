@@ -334,7 +334,7 @@ test('rate limits repeated failed login attempts', async () => {
   assert.equal(limitedResponse.status, 429);
 });
 
-test('stores AI settings and returns AI analysis', async () => {
+test('stores AI settings and caches latest analyses by scope and period', async () => {
   const settingsResponse = await request('/api/ai-settings', {
     method: 'PUT',
     token: primaryToken,
@@ -351,10 +351,18 @@ test('stores AI settings and returns AI analysis', async () => {
   assert.equal(settingsResponse.data.hasApiKey, true);
 
   const localFetch = originalFetch;
+  let aiCallIndex = 0;
   global.fetch = async (url, options) => {
     if (String(url).startsWith(baseUrl)) {
       return localFetch(url, options);
     }
+
+    aiCallIndex += 1;
+    const contents = [
+      '月度分析 v1：本月支出集中在购物类，建议控制高频高额消费。',
+      '日度分析：今天的消费集中在少数几笔大额支出。',
+      '月度分析 v2：这是覆盖后的最新月度分析。',
+    ];
 
     return {
       ok: true,
@@ -363,7 +371,7 @@ test('stores AI settings and returns AI analysis', async () => {
           choices: [
             {
               message: {
-                content: '总体结论：本月支出集中在购物类，建议控制高频高额消费。',
+                content: contents[aiCallIndex - 1] || '默认分析内容',
               },
             },
           ],
@@ -384,9 +392,58 @@ test('stores AI settings and returns AI analysis', async () => {
   assert.equal(analysisResponse.status, 200);
   assert.equal(analysisResponse.data.provider, 'deepseek');
   assert.equal(analysisResponse.data.model, 'deepseek-chat');
-  assert.match(analysisResponse.data.analysis, /总体结论/);
+  assert.match(analysisResponse.data.analysis, /月度分析 v1/);
   assert.equal(analysisResponse.data.summary.scope, 'month');
   assert.equal(analysisResponse.data.summary.label, '2026-04');
+
+  const cachedMonthResponse = await request('/api/ai-analysis?scope=month&month=2026-04', {
+    method: 'GET',
+    token: primaryToken,
+  });
+  assert.equal(cachedMonthResponse.status, 200);
+  assert.equal(cachedMonthResponse.data.cached, true);
+  assert.match(cachedMonthResponse.data.analysis, /月度分析 v1/);
+  assert.equal(cachedMonthResponse.data.summary.scope, 'month');
+
+  const dayAnalysisResponse = await request('/api/ai-analysis', {
+    method: 'POST',
+    token: primaryToken,
+    body: {
+      scope: 'day',
+      date: '2026-04-02',
+    },
+  });
+  assert.equal(dayAnalysisResponse.status, 200);
+  assert.match(dayAnalysisResponse.data.analysis, /日度分析/);
+  assert.equal(dayAnalysisResponse.data.summary.scope, 'day');
+
+  const cachedDayResponse = await request('/api/ai-analysis?scope=day&date=2026-04-02', {
+    method: 'GET',
+    token: primaryToken,
+  });
+  assert.equal(cachedDayResponse.status, 200);
+  assert.equal(cachedDayResponse.data.cached, true);
+  assert.match(cachedDayResponse.data.analysis, /日度分析/);
+  assert.equal(cachedDayResponse.data.summary.scope, 'day');
+
+  const overwrittenMonthResponse = await request('/api/ai-analysis', {
+    method: 'POST',
+    token: primaryToken,
+    body: {
+      scope: 'month',
+      month: '2026-04',
+    },
+  });
+  assert.equal(overwrittenMonthResponse.status, 200);
+  assert.match(overwrittenMonthResponse.data.analysis, /月度分析 v2/);
+
+  const cachedOverwrittenMonthResponse = await request('/api/ai-analysis?scope=month&month=2026-04', {
+    method: 'GET',
+    token: primaryToken,
+  });
+  assert.equal(cachedOverwrittenMonthResponse.status, 200);
+  assert.equal(cachedOverwrittenMonthResponse.data.cached, true);
+  assert.match(cachedOverwrittenMonthResponse.data.analysis, /月度分析 v2/);
 
   global.fetch = localFetch;
 });

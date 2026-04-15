@@ -63,6 +63,14 @@ function createFinanceRouter({ financeService, aiService, authenticate }) {
     }),
   );
 
+  router.get(
+    '/ai-analysis',
+    asyncHandler(async (req, res) => {
+      const result = await aiService.getCachedAnalysis(req.user.id, req.query);
+      res.json(result);
+    }),
+  );
+
   router.post(
     '/ai-analysis',
     asyncHandler(async (req, res) => {

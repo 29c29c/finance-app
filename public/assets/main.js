@@ -27,7 +27,6 @@
         SerialAdvance,
         EditLedgerModal,
         AISettingsModal,
-        AIAnalysisModal,
         DataMenu,
     } = FinanceUI;
 
@@ -56,7 +55,7 @@
             hasApiKey: false,
             updatedAt: null,
         });
-        const [aiAnalysis, setAiAnalysis] = useState({ open: false, loading: false, error: '', result: null });
+        const [aiAnalysis, setAiAnalysis] = useState({ loading: false, error: '', result: null, scope: '', periodKey: '' });
         const [showMonthRankingAll, setShowMonthRankingAll] = useState(false);
         const [showYearRankingAll, setShowYearRankingAll] = useState(false);
 
@@ -309,24 +308,81 @@
             setSavingAISettings(false);
         };
 
+        const currentAnalysisPayload = statsMode === 'day'
+            ? { scope: 'day', date: currentDate }
+            : statsMode === 'month'
+                ? { scope: 'month', month: currentMonth }
+                : { scope: 'year', year: Number(currentYear) };
+        const currentAnalysisPeriodKey = statsMode === 'day' ? currentDate : statsMode === 'month' ? currentMonth : String(currentYear);
+        const currentAnalysisLabel = statsMode === 'day' ? currentDate : statsMode === 'month' ? currentMonth : currentYear + ' 年';
+
+        useEffect(() => {
+            if (!token || activeTab !== 'stats') return;
+
+            const payload = currentAnalysisPayload;
+            const scope = payload.scope;
+            const periodKey = currentAnalysisPeriodKey;
+            const params = new URLSearchParams();
+            Object.entries(payload).forEach(([key, value]) => params.set(key, String(value)));
+
+            let cancelled = false;
+            setAiAnalysis({ loading: true, error: '', result: null, scope, periodKey });
+
+            (async () => {
+                api.token = token;
+                try {
+                    const cached = await api.get('/api/ai-analysis?' + params.toString());
+                    if (cancelled) return;
+                    setAiAnalysis({
+                        loading: false,
+                        error: '',
+                        result: cached.cached ? cached : null,
+                        scope,
+                        periodKey,
+                    });
+                } catch (error) {
+                    if (cancelled) return;
+                    setAiAnalysis({
+                        loading: false,
+                        error: error.message || '',
+                        result: null,
+                        scope,
+                        periodKey,
+                    });
+                }
+            })();
+
+            return () => {
+                cancelled = true;
+            };
+        }, [token, activeTab, statsMode, currentDate, currentMonth, currentYear]);
+
         const openAIAnalysis = async () => {
             if (!aiSettings.hasApiKey) {
                 setShowAISettings(true);
                 showError(new Error('请先配置 AI API Key'));
                 return;
             }
-            const payload = statsMode === 'day'
-                ? { scope: 'day', date: currentDate }
-                : statsMode === 'month'
-                    ? { scope: 'month', month: currentMonth }
-                    : { scope: 'year', year: Number(currentYear) };
+            const payload = currentAnalysisPayload;
+            const scope = payload.scope;
+            const periodKey = currentAnalysisPeriodKey;
+            const params = new URLSearchParams();
+            Object.entries(payload).forEach(([key, value]) => params.set(key, String(value)));
 
-            setAiAnalysis({ open: true, loading: true, error: '', result: null });
+            setAiAnalysis({ loading: true, error: '', result: null, scope, periodKey });
+            let cachedResult = null;
+            try {
+                const cached = await api.get('/api/ai-analysis?' + params.toString());
+                if (cached.cached) {
+                    cachedResult = cached;
+                    setAiAnalysis({ loading: true, error: '', result: cached, scope, periodKey });
+                }
+            } catch (_error) {}
             try {
                 const result = await api.post('/api/ai-analysis', payload);
-                setAiAnalysis({ open: true, loading: false, error: '', result });
+                setAiAnalysis({ loading: false, error: '', result, scope, periodKey });
             } catch (error) {
-                setAiAnalysis({ open: true, loading: false, error: error.message, result: null });
+                setAiAnalysis({ loading: false, error: error.message, result: cachedResult, scope, periodKey });
             }
         };
 
@@ -811,6 +867,31 @@
                                 </div>
                             </>
                         )}
+
+                        <div className="card">
+                            <div className="flex justify-between items-center mb-4">
+                                <div>
+                                    <h3 className="font-bold text-lg">🤖 AI 分析结果</h3>
+                                    <p className="text-xs text-gray-400 mt-1">{currentAnalysisLabel}</p>
+                                </div>
+                            </div>
+                            {aiAnalysis.loading && <div className="text-sm text-blue-500">正在读取分析结果...</div>}
+                            {aiAnalysis.error && <div className="text-sm text-red-500 mb-4">{aiAnalysis.error}</div>}
+                            {aiAnalysis.result && (
+                                <div className="space-y-4">
+                                    <div className="rounded-xl bg-blue-50 border border-blue-100 p-4 text-sm text-blue-700">
+                                        调用模型：{aiAnalysis.result.provider} / {aiAnalysis.result.model}
+                                        {aiAnalysis.result.updatedAt ? ' · 更新时间 ' + aiAnalysis.result.updatedAt + '（北京时间）' : ''}
+                                    </div>
+                                    <div className="rounded-xl bg-gray-50 border border-gray-200 p-4 text-sm leading-7 whitespace-pre-wrap">{aiAnalysis.result.analysis}</div>
+                                </div>
+                            )}
+                            {!aiAnalysis.loading && !aiAnalysis.error && !aiAnalysis.result && (
+                                <div className="rounded-xl bg-gray-50 border border-gray-200 p-4 text-sm text-gray-500">
+                                    还未分析
+                                </div>
+                            )}
+                        </div>
                     </div>
                 )}
 
@@ -867,7 +948,6 @@
                 {advancingSerial && <SerialAdvance serial={advancingSerial} onClose={() => setAdvancingSerial(null)} onConfirm={handleAdvanceSerial} />}
                 {editingLedgerItem && <EditLedgerModal item={editingLedgerItem} onClose={() => setEditingLedgerItem(null)} onSave={updateLedgerItem} />}
                 {showAISettings && <AISettingsModal settings={aiSettings} saving={savingAISettings} onClose={() => setShowAISettings(false)} onChange={(key, value) => setAiSettings({ ...aiSettings, [key]: value })} onSave={saveAISettings} />}
-                {aiAnalysis.open && <AIAnalysisModal state={aiAnalysis} scopeLabel={statsMode === 'day' ? currentDate : statsMode === 'month' ? currentMonth : currentYear + ' 年'} onClose={() => setAiAnalysis({ open: false, loading: false, error: '', result: null })} />}
             </div>
         );
     }

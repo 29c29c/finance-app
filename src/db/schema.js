@@ -110,6 +110,30 @@ const TABLE_DEFINITIONS = [
       { name: 'updated_at', definition: 'updated_at TEXT' },
     ],
   },
+  {
+    name: 'user_ai_analysis_cache',
+    createSql: `CREATE TABLE IF NOT EXISTS user_ai_analysis_cache (
+      user_id INTEGER,
+      scope TEXT,
+      period_key TEXT,
+      provider TEXT,
+      model TEXT,
+      analysis TEXT,
+      summary_json TEXT,
+      updated_at TEXT,
+      PRIMARY KEY (user_id, scope, period_key)
+    )`,
+    columns: [
+      { name: 'user_id', definition: 'user_id INTEGER', alterable: false },
+      { name: 'scope', definition: 'scope TEXT', alterable: false },
+      { name: 'period_key', definition: 'period_key TEXT', alterable: false },
+      { name: 'provider', definition: 'provider TEXT' },
+      { name: 'model', definition: 'model TEXT' },
+      { name: 'analysis', definition: 'analysis TEXT' },
+      { name: 'summary_json', definition: 'summary_json TEXT' },
+      { name: 'updated_at', definition: 'updated_at TEXT' },
+    ],
+  },
 ];
 
 const INDEX_DEFINITIONS = [

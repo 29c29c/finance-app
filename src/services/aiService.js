@@ -88,6 +88,39 @@ function buildMonthlySummaries(ledgerItems) {
     .sort((left, right) => left.month.localeCompare(right.month));
 }
 
+function buildDailySummaries(ledgerItems) {
+  const bucket = new Map();
+
+  ledgerItems.forEach((item) => {
+    const date = item.date;
+    if (!bucket.has(date)) {
+      bucket.set(date, 0);
+    }
+    bucket.set(date, bucket.get(date) + (Number(item.amount) || 0));
+  });
+
+  return [...bucket.entries()]
+    .map(([date, total]) => ({ date, total }))
+    .sort((left, right) => left.date.localeCompare(right.date));
+}
+
+function buildTopCategories(categoryBreakdown) {
+  return Object.entries(categoryBreakdown)
+    .map(([category, total]) => ({
+      category,
+      categoryLabel: CATEGORY_LABELS[category] || category,
+      total: Number((Number(total) || 0).toFixed(2)),
+    }))
+    .filter((item) => item.total > 0)
+    .sort((left, right) => right.total - left.total);
+}
+
+function getPeriodKey(payload) {
+  if (payload.scope === 'day') return payload.date;
+  if (payload.scope === 'month') return payload.month;
+  return String(payload.year);
+}
+
 function buildAnalysisSummary(scope, payload, allData) {
   const ledgerItems = allData.ledger_items || [];
   const subscriptions = allData.subscriptions || [];
@@ -120,9 +153,21 @@ function buildAnalysisSummary(scope, payload, allData) {
   const rankings = aggregateRankings(scopedLedger);
   const categoryBreakdown = buildCategoryBreakdown(scopedLedger);
   const monthlySummaries = scope === 'year' ? buildMonthlySummaries(scopedLedger) : [];
+  const dailySummaries = scope === 'month' ? buildDailySummaries(scopedLedger) : [];
+  const topCategories = buildTopCategories(categoryBreakdown);
+  const highestExpense = scopedLedger
+    .map((item) => ({
+      name: item.name,
+      category: item.category || 'shopping',
+      categoryLabel: CATEGORY_LABELS[item.category] || item.category,
+      amount: Number((Number(item.amount) || 0).toFixed(2)),
+      date: item.date,
+    }))
+    .sort((left, right) => right.amount - left.amount)[0] || null;
 
   const plannedSubscriptionImpact = scope === 'month'
     ? subscriptions.reduce((sum, item) => {
+      if (!Number(item.is_active)) return sum;
       if (item.cycle_type === 'yearly') return sum + ((Number(item.price) || 0) / 12);
       if (item.cycle_type === 'quarterly') return sum + ((Number(item.price) || 0) / 3);
       return sum + (Number(item.price) || 0);
@@ -135,21 +180,43 @@ function buildAnalysisSummary(scope, payload, allData) {
       .reduce((sum, item) => sum + (Number(item.price) || 0), 0)
     : 0;
 
+  const highestSpendDay = dailySummaries
+    .map((item) => ({ ...item, total: Number(item.total.toFixed(2)) }))
+    .sort((left, right) => right.total - left.total)[0] || null;
+  const highestSpendMonth = monthlySummaries
+    .map((item) => ({ ...item, total: Number(item.total.toFixed(2)) }))
+    .sort((left, right) => right.total - left.total)[0] || null;
+  const averagePerRecord = scopedLedger.length > 0 ? totalExpense / scopedLedger.length : 0;
+  const activeDays = new Set(scopedLedger.map((item) => item.date)).size;
+  const activeMonths = new Set(scopedLedger.map((item) => String(item.date || '').slice(0, 7))).size;
+
   return {
     scope,
     label,
+    periodKey: getPeriodKey({ scope, ...payload }),
     incomeTotal: 0,
     incomeNote: '当前数据库仅记录支出，没有独立收入字段；收入统计按 0 处理。',
     budget,
     totalExpense: Number(totalExpense.toFixed(2)),
     totalRecords: scopedLedger.length,
+    averagePerRecord: Number(averagePerRecord.toFixed(2)),
+    activeDays,
+    activeMonths,
     categoryBreakdown,
+    topCategories,
+    highestExpense,
+    highestSpendDay,
+    highestSpendMonth,
     rankings: rankings.slice(0, 15).map((item) => ({
       name: item.name,
       category: item.category,
       categoryLabel: CATEGORY_LABELS[item.category] || item.category,
       total: Number(item.total.toFixed(2)),
       count: item.count,
+    })),
+    dailySummaries: dailySummaries.map((item) => ({
+      date: item.date,
+      total: Number(item.total.toFixed(2)),
     })),
     monthlySummaries: monthlySummaries.map((item) => ({
       month: item.month,
@@ -161,40 +228,170 @@ function buildAnalysisSummary(scope, payload, allData) {
   };
 }
 
-function buildPrompt(summary) {
-  const rankings = summary.rankings.length > 0
-    ? summary.rankings.map((item, index) => `${index + 1}. ${item.name}（${item.categoryLabel}）¥${item.total}，${item.count}笔`).join('\n')
+function formatRankings(rankings) {
+  return rankings.length > 0
+    ? rankings.map((item, index) => `${index + 1}. ${item.name}（${item.categoryLabel}）¥${item.total}，${item.count}笔`).join('\n')
     : '无支出记录';
+}
 
-  const monthlyLines = summary.monthlySummaries.length > 0
-    ? summary.monthlySummaries.map((item) => `${item.month}: ¥${item.total}`).join('\n')
+function formatTopCategories(topCategories) {
+  return topCategories.length > 0
+    ? topCategories.map((item, index) => `${index + 1}. ${item.categoryLabel} ¥${item.total}`).join('\n')
     : '无';
+}
+
+function formatDailySummaries(dailySummaries) {
+  return dailySummaries.length > 0
+    ? dailySummaries.map((item) => `${item.date}: ¥${item.total}`).join('\n')
+    : '无';
+}
+
+function formatMonthlySummaries(monthlySummaries) {
+  return monthlySummaries.length > 0
+    ? monthlySummaries.map((item) => `${item.month}: ¥${item.total}`).join('\n')
+    : '无';
+}
+
+function buildDayPrompt(summary) {
+  const rankings = formatRankings(summary.rankings);
+  const topCategories = formatTopCategories(summary.topCategories);
 
   return [
-    '你是一名中文财务消费分析助手，请基于以下数据，输出简洁、可执行的分析。',
-    '输出要求：',
-    '1. 先给一句总体结论。',
-    '2. 再给 3-5 条关键发现，必须结合具体金额、类别、排行项。',
-    '3. 再给 3 条可执行建议，建议要贴合这个周期的数据。',
-    '4. 如果数据里没有收入，请明确说明“当前仅基于支出数据分析”。',
-    '5. 不要编造未提供的数据，不要输出 Markdown 表格。',
+    '你是一名中文日消费复盘助手，请只围绕“单日支出”做分析。',
+    '分析重点：',
+    '1. 判断今天支出是否集中、是否存在冲动型或大额单笔消费。',
+    '2. 识别今天最值得关注的 1-3 笔支出，以及这些支出对当天结构的影响。',
+    '3. 判断今天的消费重心落在哪些类别，是否偏离常规。',
+    '4. 给出今天结束后可执行的 3 条建议，偏向明天就能执行的控制动作。',
+    '5. 不要写月度或年度趋势判断，除非数据里明确给出当天与月预算的关系。',
+    '6. 如果没有收入数据，要明确说明“当前仅基于支出数据分析”。',
     '',
-    `分析范围: ${summary.scope}`,
-    `周期标签: ${summary.label}`,
-    `收入总额: ¥${summary.incomeTotal}`,
+    `日期: ${summary.label}`,
     `收入说明: ${summary.incomeNote}`,
-    `支出总额: ¥${summary.totalExpense}`,
-    `记录笔数: ${summary.totalRecords}`,
-    `预算: ${summary.budget === null ? '未设置' : `¥${summary.budget}`}`,
+    `当日支出总额: ¥${summary.totalExpense}`,
+    `当日记录笔数: ${summary.totalRecords}`,
+    `单笔平均金额: ¥${summary.averagePerRecord}`,
+    `当月预算: ${summary.budget === null ? '未设置' : `¥${summary.budget}`}`,
+    `当日订阅已入账金额: ¥${summary.actualSubscriptionExpense}`,
+    `最大单笔: ${summary.highestExpense ? `${summary.highestExpense.date} ${summary.highestExpense.name}（${summary.highestExpense.categoryLabel}）¥${summary.highestExpense.amount}` : '无'}`,
+    '当日类别分布:',
+    topCategories,
+    '当日名称排行:',
+    rankings,
+  ].join('\n');
+}
+
+function buildMonthPrompt(summary) {
+  const rankings = formatRankings(summary.rankings);
+  const topCategories = formatTopCategories(summary.topCategories);
+  const dailyLines = formatDailySummaries(summary.dailySummaries);
+
+  return [
+    '你是一名中文月度消费分析助手，请只围绕“单月支出”做分析。',
+    '分析重点：',
+    '1. 判断本月支出是否接近或超过预算，说明主要原因。',
+    '2. 分析本月类别结构、 recurring 支出压力（订阅）与计划支出压力（连载）。',
+    '3. 找出本月最高支出日、最大单笔、最主要的消费项目，并解释它们对全月的影响。',
+    '4. 给出 3 条下个月可执行的优化建议，优先针对预算、订阅和高频支出。',
+    '5. 必须结合本月的类别、金额、排行、单日峰值来分析，不要写成日度复盘或年度趋势。',
+    '6. 如果没有收入数据，要明确说明“当前仅基于支出数据分析”。',
+    '',
+    `月份: ${summary.label}`,
+    `收入说明: ${summary.incomeNote}`,
+    `本月支出总额: ¥${summary.totalExpense}`,
+    `本月预算: ${summary.budget === null ? '未设置' : `¥${summary.budget}`}`,
+    `本月记录笔数: ${summary.totalRecords}`,
+    `有支出天数: ${summary.activeDays}`,
+    `单笔平均金额: ¥${summary.averagePerRecord}`,
     `订阅已记入实际支出: ¥${summary.actualSubscriptionExpense}`,
     `本月预计订阅影响: ¥${summary.plannedSubscriptionImpact}`,
     `本月预计连载影响: ¥${summary.plannedSerialImpact}`,
-    `分类拆分: 购物/连载 ¥${Number(summary.categoryBreakdown.shopping || 0).toFixed(2)}；食品 ¥${Number(summary.categoryBreakdown.food || 0).toFixed(2)}；交通 ¥${Number(summary.categoryBreakdown.transport || 0).toFixed(2)}；订阅 ¥${Number(summary.categoryBreakdown.subscription || 0).toFixed(2)}`,
-    '支出排行:',
+    `最高支出日: ${summary.highestSpendDay ? `${summary.highestSpendDay.date} ¥${summary.highestSpendDay.total}` : '无'}`,
+    `最大单笔: ${summary.highestExpense ? `${summary.highestExpense.date} ${summary.highestExpense.name}（${summary.highestExpense.categoryLabel}）¥${summary.highestExpense.amount}` : '无'}`,
+    '本月类别分布:',
+    topCategories,
+    '本月按日汇总:',
+    dailyLines,
+    '本月名称排行:',
     rankings,
+  ].join('\n');
+}
+
+function buildYearPrompt(summary) {
+  const rankings = formatRankings(summary.rankings);
+  const topCategories = formatTopCategories(summary.topCategories);
+  const monthlyLines = formatMonthlySummaries(summary.monthlySummaries);
+
+  return [
+    '你是一名中文年度消费分析助手，请只围绕“单年支出”做分析。',
+    '分析重点：',
+    '1. 总结全年消费水平、月度波动和高峰月份，识别年度趋势。',
+    '2. 分析全年主要消费类别和高额项目，判断长期支出结构是否健康。',
+    '3. 找出全年最值得关注的月份和项目，解释其背后的可能原因。',
+    '4. 给出 3 条面向下一年度或接下来几个季度的规划建议，偏向结构优化和预算安排。',
+    '5. 不要把分析写成日度或单月复盘，要突出趋势、季节性和长期 recurring 支出影响。',
+    '6. 如果没有收入数据，要明确说明“当前仅基于支出数据分析”。',
+    '',
+    `年份: ${summary.label}`,
+    `收入说明: ${summary.incomeNote}`,
+    `年度支出总额: ¥${summary.totalExpense}`,
+    `年度记录笔数: ${summary.totalRecords}`,
+    `活跃月份数: ${summary.activeMonths}`,
+    `年度单笔平均金额: ¥${summary.averagePerRecord}`,
+    `最高支出月份: ${summary.highestSpendMonth ? `${summary.highestSpendMonth.month} ¥${summary.highestSpendMonth.total}` : '无'}`,
+    `年度最大单笔: ${summary.highestExpense ? `${summary.highestExpense.date} ${summary.highestExpense.name}（${summary.highestExpense.categoryLabel}）¥${summary.highestExpense.amount}` : '无'}`,
+    '年度类别分布:',
+    topCategories,
     '年度月份汇总:',
     monthlyLines,
+    '年度名称排行:',
+    rankings,
   ].join('\n');
+}
+
+function buildPrompt(summary) {
+  if (summary.scope === 'day') {
+    return buildDayPrompt(summary);
+  }
+
+  if (summary.scope === 'month') {
+    return buildMonthPrompt(summary);
+  }
+
+  return buildYearPrompt(summary);
+}
+
+function normalizeCachedAnalysis(cache) {
+  if (!cache) {
+    return {
+      cached: false,
+    };
+  }
+
+  return {
+    cached: true,
+    analysis: cache.analysis,
+    summary: JSON.parse(cache.summary_json),
+    model: cache.model,
+    provider: cache.provider,
+    updatedAt: cache.updated_at,
+  };
+}
+
+function buildAiCachePayload(settings, summary, analysis) {
+  return {
+    scope: summary.scope,
+    period_key: summary.periodKey,
+    provider: settings.provider,
+    model: settings.model,
+    analysis,
+    summary_json: JSON.stringify(summary),
+    updated_at: getBeijingIsoString(),
+  };
+}
+
+function loadAndValidatePayload(payload) {
+  return validateAiAnalysisPayload(payload);
 }
 
 function normalizeStoredSettings(settings) {
@@ -244,8 +441,20 @@ function createAiService({ db, fetchImpl = (...args) => global.fetch(...args) })
       return this.getSettings(userId);
     },
 
+    async getCachedAnalysis(userId, payload) {
+      const normalizedPayload = loadAndValidatePayload(payload);
+      const cache = await aiRepository.getCachedAnalysis(
+        db,
+        userId,
+        normalizedPayload.scope,
+        getPeriodKey(normalizedPayload),
+      );
+
+      return normalizeCachedAnalysis(cache);
+    },
+
     async analyze(userId, payload) {
-      const normalizedPayload = validateAiAnalysisPayload(payload);
+      const normalizedPayload = loadAndValidatePayload(payload);
       const settings = await aiRepository.getSettingsByUserId(db, userId);
 
       if (!settings?.api_key) {
@@ -290,11 +499,15 @@ function createAiService({ db, fetchImpl = (...args) => global.fetch(...args) })
         throw new AppError('AI 返回内容为空', 502);
       }
 
+      const cachePayload = buildAiCachePayload(settings, summary, content);
+      await aiRepository.upsertCachedAnalysis(db, userId, cachePayload);
+
       return {
         analysis: content,
         summary,
         model: settings.model,
         provider: settings.provider,
+        updatedAt: cachePayload.updated_at,
       };
     },
   };
