@@ -1,0 +1,1261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>财务指挥中心</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body { background-color: #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; -webkit-tap-highlight-color: transparent; }
+        .card { @apply bg-white rounded-xl shadow-sm p-5; }
+        .input { @apply border border-gray-300 rounded-lg px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-500; }
+        .input-lg { @apply text-2xl font-bold py-3 text-center border-blue-200 focus:border-blue-500; }
+        .btn { @apply px-4 py-2 rounded-lg font-medium transition-colors active:scale-95 transform; }
+        .btn-primary { @apply bg-blue-600 text-white hover:bg-blue-700 shadow-md shadow-blue-200; }
+        .btn-danger { @apply bg-red-500 text-white hover:bg-red-600; }
+        .btn-ghost { @apply text-gray-500 hover:text-gray-700; }
+        .fab { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 50; }
+        .fab-btn { @apply w-16 h-16 rounded-full bg-blue-600 text-white shadow-lg flex items-center justify-center text-4xl transition-transform hover:scale-105 active:scale-90; }
+        .overlay { @apply fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center backdrop-blur-sm p-0 sm:p-4; }
+        .modal-box { @apply bg-white w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl p-6 shadow-2xl animate-slide-up sm:animate-none; }
+        .modal-box-lg { @apply bg-white w-full sm:max-w-2xl rounded-t-2xl sm:rounded-2xl p-6 shadow-2xl animate-slide-up sm:animate-none max-h-[85vh] overflow-y-auto; }
+        @keyframes slide-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+        const { createRoot } = ReactDOM;
+
+        const BEIJING_TZ = 'Asia/Shanghai';
+        const CATEGORIES = { shopping: '购物/连载', food: '食品', transport: '交通', subscription: '订阅' };
+        const CAT_ICONS = { shopping: '🛍️', food: '🍔', transport: '🚗', subscription: '📅' };
+        const SERIAL_STATUS_LABELS = { planned: 'planned', ordered: 'ordered', paid: 'paid', delayed: 'delayed' };
+
+        const api = {
+            token: localStorage.getItem('token'),
+            headers() {
+                const headers = { 'Content-Type': 'application/json' };
+                if (this.token) headers.Authorization = 'Bearer ' + this.token;
+                return headers;
+            },
+            async req(url, method, body) {
+                const options = { method, headers: this.headers() };
+                if (body !== undefined) options.body = JSON.stringify(body);
+                const res = await fetch(url, options);
+                let data = {};
+                try { data = await res.json(); } catch (_error) {}
+                if (!res.ok) {
+                    const error = new Error(data.error || '请求失败');
+                    error.status = res.status;
+                    throw error;
+                }
+                return data;
+            },
+            post(url, body) { return this.req(url, 'POST', body); },
+            get(url) { return this.req(url, 'GET'); },
+            delete(url) { return this.req(url, 'DELETE'); },
+            put(url, body) { return this.req(url, 'PUT', body); }
+        };
+
+        const getParts = (date = new Date()) => {
+            const parts = new Intl.DateTimeFormat('en-CA', {
+                timeZone: BEIJING_TZ,
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false,
+            }).formatToParts(date);
+            return parts.reduce((acc, item) => {
+                if (item.type !== 'literal') acc[item.type] = item.value;
+                return acc;
+            }, {});
+        };
+
+        const today = () => {
+            const parts = getParts();
+            return `${parts.year}-${parts.month}-${parts.day}`;
+        };
+
+        const currentMonthStr = () => today().slice(0, 7);
+        const currentYearStr = () => today().slice(0, 4);
+        const beijingTimestampLabel = () => {
+            const parts = getParts();
+            return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+        };
+
+        const nextMonth = () => {
+            const [year, month] = currentMonthStr().split('-').map(Number);
+            const next = month === 12 ? { year: year + 1, month: 1 } : { year, month: month + 1 };
+            return `${next.year}-${String(next.month).padStart(2, '0')}`;
+        };
+
+        const safeNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
+        const formatMoney = (value, digits = 2) => safeNumber(value).toFixed(digits);
+        const monthFromDate = (date) => String(date || '').slice(0, 7);
+        const yearFromDate = (date) => String(date || '').slice(0, 4);
+
+        const escapeCsvValue = (value) => {
+            const raw = String(value ?? '');
+            const dangerous = /^[=+\-@]/.test(raw) || raw.startsWith('\t');
+            const safe = dangerous ? "'" + raw : raw;
+            return `"${safe.replace(/"/g, '""')}"`;
+        };
+
+        const getNextName = (name) => {
+            const match = name.match(/(\d+)(?!.*\d)/);
+            if (match) {
+                const num = parseInt(match[0], 10);
+                return name.replace(/(\d+)(?!.*\d)/, num + 1);
+            }
+            return name + ' 下一期';
+        };
+
+        const buildCategoryBreakdown = (items) => items.reduce((acc, item) => {
+            const key = item.category || 'shopping';
+            acc[key] = (acc[key] || 0) + safeNumber(item.amount);
+            return acc;
+        }, { shopping: 0, food: 0, transport: 0, subscription: 0 });
+
+        const buildNameRanking = (items) => {
+            const map = new Map();
+            items.forEach((item) => {
+                const key = `${item.category || 'shopping'}::${item.name}`;
+                if (!map.has(key)) {
+                    map.set(key, { name: item.name, category: item.category || 'shopping', total: 0, count: 0 });
+                }
+                const row = map.get(key);
+                row.total += safeNumber(item.amount);
+                row.count += 1;
+            });
+            return Array.from(map.values()).sort((a, b) => b.total - a.total);
+        };
+
+        const buildMonthlyTotals = (items, year) => {
+            const bucket = {};
+            items.filter((item) => yearFromDate(item.date) === String(year)).forEach((item) => {
+                const month = monthFromDate(item.date);
+                bucket[month] = (bucket[month] || 0) + safeNumber(item.amount);
+            });
+            return Object.entries(bucket).sort((a, b) => a[0].localeCompare(b[0])).map(([month, total]) => ({ month, total }));
+        };
+
+        function Notice({ notice }) {
+            if (!notice?.text) return null;
+            const className = notice.type === 'error'
+                ? 'bg-red-50 text-red-600 border-red-100'
+                : notice.type === 'success'
+                    ? 'bg-green-50 text-green-600 border-green-100'
+                    : 'bg-blue-50 text-blue-600 border-blue-100';
+            return <div className={`mb-4 border rounded-xl px-4 py-3 text-sm ${className}`}>{notice.text}</div>;
+        }
+
+        function Auth({ onLogin }) {
+            const [isRegister, setIsRegister] = useState(false);
+            const [form, setForm] = useState({ username: '', password: '', inviteCode: '' });
+            const [error, setError] = useState('');
+            const submit = async (e) => {
+                e.preventDefault();
+                setError('');
+                try {
+                    const data = await api.req(isRegister ? '/api/register' : '/api/login', 'POST', form);
+                    if (isRegister) {
+                        setIsRegister(false);
+                        alert('注册成功');
+                    } else {
+                        localStorage.setItem('token', data.token);
+                        api.token = data.token;
+                        onLogin();
+                    }
+                } catch (err) {
+                    setError(err.message);
+                }
+            };
+            return (
+                <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
+                    <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-sm">
+                        <h2 className="text-2xl font-bold mb-6 text-center text-gray-800">{isRegister ? '注册指挥中心' : '登录'}</h2>
+                        <form onSubmit={submit} className="space-y-4">
+                            <input className="input" placeholder="用户名" value={form.username} onChange={e => setForm({ ...form, username: e.target.value })} required />
+                            <input className="input" type="password" placeholder="密码" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} required />
+                            {isRegister && <input className="input" placeholder="邀请码" value={form.inviteCode} onChange={e => setForm({ ...form, inviteCode: e.target.value })} required />}
+                            {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+                            <button className="btn btn-primary w-full py-3" type="submit">{isRegister ? '注册' : '登录'}</button>
+                            <p className="text-center text-sm text-blue-600 cursor-pointer mt-4" onClick={() => setIsRegister(!isRegister)}>
+                                {isRegister ? '去登录' : '使用邀请码注册'}
+                            </p>
+                        </form>
+                    </div>
+                </div>
+            );
+        }
+
+        function QuickAdd({ onClose, onSave }) {
+            const [amount, setAmount] = useState('');
+            const [note, setNote] = useState('');
+            const [date, setDate] = useState(today());
+            const inputRef = useRef(null);
+
+            useEffect(() => inputRef.current?.focus(), []);
+
+            const handleSave = (cat) => {
+                if (!amount) return inputRef.current?.focus();
+                onSave({ date, category: cat, name: note || CATEGORIES[cat], amount: parseFloat(amount) });
+                onClose();
+            };
+
+            return (
+                <div className="overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+                    <div className="modal-box">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-lg font-bold text-gray-700">⚡ 极速记账</h3>
+                            <button onClick={onClose} className="text-gray-400 text-2xl">&times;</button>
+                        </div>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="text-xs text-gray-500 mb-1 block">金额</label>
+                                <input ref={inputRef} type="number" className="input input-lg" placeholder="0.00" value={amount} onChange={e => setAmount(e.target.value)} />
+                            </div>
+                            <div className="flex gap-2">
+                                <input type="text" className="input flex-1" placeholder="备注 (选填)" value={note} onChange={e => setNote(e.target.value)} />
+                                <input type="date" className="input w-32" value={date} onChange={e => setDate(e.target.value)} />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3 pt-2">
+                                {Object.entries(CATEGORIES).map(([key, label]) => (
+                                    <button key={key} type="button" onClick={() => handleSave(key)} className="flex flex-col items-center justify-center p-4 bg-gray-50 rounded-xl border border-gray-100 active:bg-blue-50 active:border-blue-500 transition-all">
+                                        <span className="text-3xl mb-1">{CAT_ICONS[key]}</span>
+                                        <span className="text-xs font-medium text-gray-600">{label}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function SerialAdvance({ serial, onClose, onConfirm }) {
+            const [expense, setExpense] = useState({ amount: serial.price, date: today() });
+            const [next, setNext] = useState({ name: getNextName(serial.name), price: serial.price, date: nextMonth() });
+
+            const handleSubmit = () => {
+                onConfirm(serial.id, {
+                    expense: { ...expense, category: 'shopping', name: serial.name + ' (已付)' },
+                    next
+                });
+                onClose();
+            };
+
+            return (
+                <div className="overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+                    <div className="modal-box">
+                        <h3 className="text-lg font-bold mb-4 text-blue-600">📖 结算并续杯</h3>
+                        <div className="space-y-6">
+                            <div className="bg-gray-50 p-3 rounded-lg border border-dashed border-gray-300">
+                                <div className="text-xs font-bold text-gray-500 mb-2 uppercase">1. 确认本次消费</div>
+                                <div className="flex gap-2">
+                                    <div className="flex-1">
+                                        <div className="text-sm font-medium">{serial.name}</div>
+                                        <div className="text-xs text-gray-400">记入账单</div>
+                                    </div>
+                                    <input type="number" className="input w-24 text-right" value={expense.amount} onChange={e => setExpense({ ...expense, amount: parseFloat(e.target.value || '0') })} />
+                                </div>
+                                <input type="date" className="input mt-3" value={expense.date} onChange={e => setExpense({ ...expense, date: e.target.value })} />
+                            </div>
+                            <div className="bg-blue-50 p-3 rounded-lg border border-blue-200">
+                                <div className="text-xs font-bold text-blue-500 mb-2 uppercase">2. 预订下一期 (可修改)</div>
+                                <div className="space-y-3">
+                                    <input className="input border-blue-200" value={next.name} onChange={e => setNext({ ...next, name: e.target.value })} placeholder="下期名称" />
+                                    <div className="flex gap-2">
+                                        <input type="month" className="input border-blue-200" value={next.date} onChange={e => setNext({ ...next, date: e.target.value })} />
+                                        <input type="number" className="input border-blue-200 w-24 text-right" value={next.price} onChange={e => setNext({ ...next, price: parseFloat(e.target.value || '0') })} placeholder="预估价" />
+                                    </div>
+                                </div>
+                            </div>
+                            <button onClick={handleSubmit} className="btn btn-primary w-full py-3 text-lg">确认结算 & 更新计划</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function EditLedgerModal({ item, onClose, onSave }) {
+            const [form, setForm] = useState({ category: item.category, name: item.name, amount: item.amount });
+
+            const submit = (e) => {
+                e.preventDefault();
+                onSave({ ...item, ...form, amount: parseFloat(form.amount || '0') });
+            };
+
+            return (
+                <div className="overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+                    <div className="modal-box">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-lg font-bold text-gray-700">编辑当日记录</h3>
+                            <button onClick={onClose} className="text-gray-400 text-2xl">&times;</button>
+                        </div>
+                        <form onSubmit={submit} className="space-y-4">
+                            <div>
+                                <label className="text-xs text-gray-500 mb-1 block">日期</label>
+                                <input className="input bg-gray-50" value={item.date} readOnly />
+                            </div>
+                            <div>
+                                <label className="text-xs text-gray-500 mb-1 block">支出类型</label>
+                                <select className="input" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
+                                    {Object.entries(CATEGORIES).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="text-xs text-gray-500 mb-1 block">名称</label>
+                                <input className="input" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required />
+                            </div>
+                            <div>
+                                <label className="text-xs text-gray-500 mb-1 block">金额</label>
+                                <input type="number" className="input" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} required />
+                            </div>
+                            <button className="btn btn-primary w-full py-3" type="submit">保存修改</button>
+                        </form>
+                    </div>
+                </div>
+            );
+        }
+
+        function AISettingsModal({ settings, saving, onClose, onChange, onSave }) {
+            return (
+                <div className="overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+                    <div className="modal-box">
+                        <div className="flex justify-between items-center mb-4">
+                            <div>
+                                <h3 className="text-lg font-bold text-gray-700">AI 设置</h3>
+                                <p className="text-xs text-gray-400 mt-1">优先支持 DeepSeek，也兼容 OpenAI 风格接口。</p>
+                            </div>
+                            <button onClick={onClose} className="text-gray-400 text-2xl">&times;</button>
+                        </div>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="text-xs text-gray-500 mb-1 block">提供商</label>
+                                <select className="input" value={settings.provider} onChange={e => onChange('provider', e.target.value)}>
+                                    <option value="deepseek">DeepSeek</option>
+                                    <option value="openai-compatible">OpenAI Compatible</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="text-xs text-gray-500 mb-1 block">接口地址</label>
+                                <input className="input" value={settings.endpointUrl} onChange={e => onChange('endpointUrl', e.target.value)} placeholder="https://api.deepseek.com/v1/chat/completions" />
+                            </div>
+                            <div>
+                                <label className="text-xs text-gray-500 mb-1 block">模型</label>
+                                <input className="input" value={settings.model} onChange={e => onChange('model', e.target.value)} placeholder="deepseek-chat" />
+                            </div>
+                            <div>
+                                <label className="text-xs text-gray-500 mb-1 block">API Key {settings.hasApiKey && <span className="text-green-500">（已保存，可留空不改）</span>}</label>
+                                <input type="password" className="input" value={settings.apiKey} onChange={e => onChange('apiKey', e.target.value)} placeholder={settings.hasApiKey ? '留空则保持原 Key' : '请输入 API Key'} />
+                            </div>
+                            {settings.updatedAt && <p className="text-xs text-gray-400">最近更新：{settings.updatedAt}（北京时间）</p>}
+                            <button className="btn btn-primary w-full py-3" type="button" onClick={onSave} disabled={saving}>{saving ? '保存中...' : '保存 AI 设置'}</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function AIAnalysisModal({ state, scopeLabel, onClose }) {
+            return (
+                <div className="overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+                    <div className="modal-box-lg">
+                        <div className="flex justify-between items-center mb-4">
+                            <div>
+                                <h3 className="text-lg font-bold text-gray-700">AI 分析</h3>
+                                <p className="text-xs text-gray-400 mt-1">{scopeLabel}</p>
+                            </div>
+                            <button onClick={onClose} className="text-gray-400 text-2xl">&times;</button>
+                        </div>
+                        {state.loading && <div className="text-sm text-blue-500">正在分析中...</div>}
+                        {state.error && <div className="text-sm text-red-500">{state.error}</div>}
+                        {state.result && (
+                            <div className="space-y-4">
+                                <div className="rounded-xl bg-blue-50 border border-blue-100 p-4 text-sm text-blue-700">
+                                    调用模型：{state.result.provider} / {state.result.model}
+                                </div>
+                                <div className="rounded-xl bg-gray-50 border border-gray-200 p-4 text-sm leading-7 whitespace-pre-wrap">{state.result.analysis}</div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        function DataMenu({ onExportJSON, onExportCSV, onOpenAISettings }) {
+            const [open, setOpen] = useState(false);
+            return (
+                <div className="relative">
+                    <button onClick={() => setOpen(!open)} className="p-2 rounded-full hover:bg-gray-100 text-gray-600">
+                        <i data-lucide="database"></i>
+                    </button>
+                    {open && (
+                        <div className="absolute right-0 top-10 w-56 bg-white rounded-lg shadow-xl border border-gray-100 py-2 z-20">
+                            <div className="px-4 py-2 text-xs font-bold text-gray-400 uppercase">数据管理</div>
+                            <button onClick={() => { onExportJSON(); setOpen(false); }} className="w-full text-left px-4 py-2 hover:bg-gray-50 text-sm">📥 备份全站数据 (.json)</button>
+                            <button onClick={() => { onExportCSV(); setOpen(false); }} className="w-full text-left px-4 py-2 hover:bg-gray-50 text-sm">📊 导出账单表格 (.csv)</button>
+                            <button onClick={() => { onOpenAISettings(); setOpen(false); }} className="w-full text-left px-4 py-2 hover:bg-gray-50 text-sm">🤖 AI Key / 模型设置</button>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        function App() {
+            const [token, setToken] = useState(localStorage.getItem('token'));
+            const [loading, setLoading] = useState(true);
+            const [currentMonth, setCurrentMonth] = useState(currentMonthStr());
+            const [currentDate, setCurrentDate] = useState(today());
+            const [currentYear, setCurrentYear] = useState(currentYearStr());
+            const [data, setData] = useState({ subscriptions: [], serials: [], ledger: [], budget: 0 });
+            const [allData, setAllData] = useState({ subscriptions: [], serials: [], ledger_items: [], budgets: [] });
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const [statsMode, setStatsMode] = useState('month');
+            const [showQuickAdd, setShowQuickAdd] = useState(false);
+            const [advancingSerial, setAdvancingSerial] = useState(null);
+            const [editingLedgerItem, setEditingLedgerItem] = useState(null);
+            const [notice, setNotice] = useState({ text: '', type: 'info' });
+            const [refreshTime, setRefreshTime] = useState('');
+            const [showAISettings, setShowAISettings] = useState(false);
+            const [savingAISettings, setSavingAISettings] = useState(false);
+            const [aiSettings, setAiSettings] = useState({
+                provider: 'deepseek',
+                endpointUrl: 'https://api.deepseek.com/v1/chat/completions',
+                model: 'deepseek-chat',
+                apiKey: '',
+                hasApiKey: false,
+                updatedAt: null,
+            });
+            const [aiAnalysis, setAiAnalysis] = useState({ open: false, loading: false, error: '', result: null });
+            const [showMonthRankingAll, setShowMonthRankingAll] = useState(false);
+            const [showYearRankingAll, setShowYearRankingAll] = useState(false);
+
+            useEffect(() => {
+                if (token) {
+                    fetchData();
+                    fetchAISettings();
+                } else {
+                    setLoading(false);
+                }
+            }, [token, currentMonth]);
+
+            useEffect(() => { lucide.createIcons(); }, [activeTab, data, allData, showAISettings, aiAnalysis, editingLedgerItem]);
+
+            const showError = (error) => setNotice({ text: error.message || '操作失败', type: 'error' });
+            const showSuccess = (text) => setNotice({ text, type: 'success' });
+
+            const fetchAISettings = async () => {
+                api.token = token;
+                try {
+                    const res = await api.get('/api/ai-settings');
+                    setAiSettings((prev) => ({
+                        ...prev,
+                        provider: res.provider || 'deepseek',
+                        endpointUrl: res.endpointUrl || 'https://api.deepseek.com/v1/chat/completions',
+                        model: res.model || 'deepseek-chat',
+                        apiKey: '',
+                        hasApiKey: !!res.hasApiKey,
+                        updatedAt: res.updatedAt || null,
+                    }));
+                } catch (_error) {}
+            };
+
+            const fetchData = async () => {
+                setLoading(true);
+                api.token = token;
+                try {
+                    const [dashboard, exported] = await Promise.all([
+                        api.get('/api/data?month=' + currentMonth),
+                        api.get('/api/export/all?month=' + currentMonth),
+                    ]);
+                    setData(dashboard);
+                    setAllData(exported);
+                    setRefreshTime(beijingTimestampLabel());
+                } catch (error) {
+                    showError(error);
+                    if (error.status === 401 || error.status === 403) {
+                        localStorage.removeItem('token');
+                        api.token = '';
+                        setToken(null);
+                    }
+                }
+                setLoading(false);
+            };
+
+            const ledgerItems = allData.ledger_items || [];
+            const dayLedger = useMemo(() => ledgerItems.filter(item => item.date === currentDate), [ledgerItems, currentDate]);
+            const monthLedger = useMemo(() => ledgerItems.filter(item => monthFromDate(item.date) === currentMonth), [ledgerItems, currentMonth]);
+            const yearLedger = useMemo(() => ledgerItems.filter(item => yearFromDate(item.date) === String(currentYear)), [ledgerItems, currentYear]);
+            const groupedLedger = useMemo(() => {
+                const groups = {};
+                data.ledger.forEach(item => {
+                    if (!groups[item.date]) groups[item.date] = [];
+                    groups[item.date].push(item);
+                });
+                return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
+            }, [data.ledger]);
+
+            const subStats = useMemo(() => {
+                let cost = 0;
+                const warnings = [];
+                (allData.subscriptions || []).forEach(sub => {
+                    if (!Number(sub.is_active)) return;
+                    let price = safeNumber(sub.price);
+                    if (sub.cycle_type === 'yearly') {
+                        price /= 12;
+                        if (String(sub.first_payment_date || '').slice(5, 7) === currentMonth.slice(5, 7)) warnings.push(sub);
+                    } else if (sub.cycle_type === 'quarterly') {
+                        price /= 3;
+                    }
+                    cost += price;
+                });
+                return { cost, warnings };
+            }, [allData.subscriptions, currentMonth]);
+
+            const plannedSerialCost = useMemo(() =>
+                (allData.serials || [])
+                    .filter(s => s.expected_release_date === currentMonth && s.status !== 'paid')
+                    .reduce((sum, item) => sum + safeNumber(item.price), 0)
+            , [allData.serials, currentMonth]);
+
+            const actual = useMemo(() => {
+                const breakdown = buildCategoryBreakdown(data.ledger);
+                const total = data.ledger.reduce((sum, item) => sum + safeNumber(item.amount), 0);
+                return { total, breakdown };
+            }, [data.ledger]);
+
+            const dayRanking = useMemo(() => buildNameRanking(dayLedger), [dayLedger]);
+            const monthRanking = useMemo(() => buildNameRanking(monthLedger), [monthLedger]);
+            const yearRanking = useMemo(() => buildNameRanking(yearLedger), [yearLedger]);
+            const yearMonthlyTotals = useMemo(() => buildMonthlyTotals(ledgerItems, currentYear), [ledgerItems, currentYear]);
+            const yearTotal = useMemo(() => yearLedger.reduce((sum, item) => sum + safeNumber(item.amount), 0), [yearLedger]);
+            const monthBudget = useMemo(() => {
+                const row = (allData.budgets || []).find(item => item.month_str === currentMonth);
+                return row ? safeNumber(row.budget_amount) : safeNumber(data.budget);
+            }, [allData.budgets, currentMonth, data.budget]);
+            const dayBreakdown = useMemo(() => buildCategoryBreakdown(dayLedger), [dayLedger]);
+            const monthBreakdown = useMemo(() => buildCategoryBreakdown(monthLedger), [monthLedger]);
+            const yearBreakdown = useMemo(() => buildCategoryBreakdown(yearLedger), [yearLedger]);
+            const maxYearMonth = useMemo(() => yearMonthlyTotals.reduce((max, item) => !max || item.total > max.total ? item : max, null), [yearMonthlyTotals]);
+            const actualSubscriptionLedger = useMemo(() =>
+                monthLedger.filter(item => item.category === 'subscription')
+            , [monthLedger]);
+
+            const refreshAll = async (successMessage) => {
+                await fetchData();
+                if (successMessage) showSuccess(successMessage);
+            };
+
+            const handleQuickAdd = async (item) => {
+                try {
+                    await api.post('/api/ledger_items', item);
+                    await refreshAll('记账成功');
+                } catch (error) {
+                    showError(error);
+                }
+            };
+
+            const handleAdvanceSerial = async (id, payload) => {
+                try {
+                    await api.post('/api/serials/' + id + '/advance', payload);
+                    await refreshAll('连载已结算并续杯');
+                } catch (error) {
+                    showError(error);
+                }
+            };
+
+            const deleteLedgerItem = async (id) => {
+                if (!confirm('确认删除这条记录吗?')) return;
+                try {
+                    await api.delete('/api/ledger_items/' + id);
+                    await refreshAll('记录已删除');
+                } catch (error) {
+                    showError(error);
+                }
+            };
+
+            const updateLedgerItem = async (item) => {
+                try {
+                    await api.put('/api/ledger_items/' + item.id, {
+                        date: item.date,
+                        category: item.category,
+                        name: item.name,
+                        amount: item.amount,
+                    });
+                    setEditingLedgerItem(null);
+                    await refreshAll('记录已更新');
+                } catch (error) {
+                    showError(error);
+                }
+            };
+
+            const saveSubscription = async (subscription, patch, successMessage) => {
+                const payload = {
+                    name: patch.name ?? subscription.name,
+                    price: patch.price ?? subscription.price,
+                    cycle_type: patch.cycle_type ?? subscription.cycle_type,
+                    first_payment_date: patch.first_payment_date ?? subscription.first_payment_date,
+                    is_active: patch.is_active ?? Number(subscription.is_active || 0),
+                };
+                await api.put('/api/subscriptions/' + subscription.id, payload);
+                await refreshAll(successMessage);
+            };
+
+            const toggleSubscription = async (subscription, checked) => {
+                if (checked && !subscription.first_payment_date) {
+                    showError(new Error('请先填写续订时间，再打开订阅开关'));
+                    return;
+                }
+                try {
+                    await saveSubscription(subscription, { is_active: checked ? 1 : 0 }, checked ? '订阅已开启自动续订入账' : '订阅已关闭');
+                } catch (error) {
+                    showError(error);
+                }
+            };
+
+            const updateSubscriptionRenewalDate = async (subscription, renewalDate) => {
+                if (!renewalDate) {
+                    showError(new Error('续订时间不能为空'));
+                    return;
+                }
+                try {
+                    await saveSubscription(subscription, { first_payment_date: renewalDate }, '续订时间已更新');
+                } catch (error) {
+                    showError(error);
+                }
+            };
+
+            const exportJSON = async () => {
+                const blob = new Blob([JSON.stringify(allData, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'finance_backup_' + today() + '.json';
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+
+            const exportCSV = async () => {
+                let csv = 'Date,Category,Name,Amount\n';
+                (allData.ledger_items || []).forEach(i => {
+                    csv += [
+                        escapeCsvValue(i.date),
+                        escapeCsvValue(i.category),
+                        escapeCsvValue(i.name),
+                        escapeCsvValue(i.amount),
+                    ].join(',') + '\n';
+                });
+                const blob = new Blob([csv], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'ledger_' + today() + '.csv';
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+
+            const saveAISettings = async () => {
+                setSavingAISettings(true);
+                try {
+                    const res = await api.put('/api/ai-settings', {
+                        provider: aiSettings.provider,
+                        endpointUrl: aiSettings.endpointUrl,
+                        model: aiSettings.model,
+                        apiKey: aiSettings.apiKey,
+                    });
+                    setAiSettings({
+                        provider: res.provider,
+                        endpointUrl: res.endpointUrl,
+                        model: res.model,
+                        apiKey: '',
+                        hasApiKey: !!res.hasApiKey,
+                        updatedAt: res.updatedAt || null,
+                    });
+                    setShowAISettings(false);
+                    showSuccess('AI 设置已保存');
+                } catch (error) {
+                    showError(error);
+                }
+                setSavingAISettings(false);
+            };
+
+            const openAIAnalysis = async () => {
+                if (!aiSettings.hasApiKey) {
+                    setShowAISettings(true);
+                    showError(new Error('请先配置 AI API Key'));
+                    return;
+                }
+                const payload = statsMode === 'day'
+                    ? { scope: 'day', date: currentDate }
+                    : statsMode === 'month'
+                        ? { scope: 'month', month: currentMonth }
+                        : { scope: 'year', year: Number(currentYear) };
+
+                setAiAnalysis({ open: true, loading: true, error: '', result: null });
+                try {
+                    const result = await api.post('/api/ai-analysis', payload);
+                    setAiAnalysis({ open: true, loading: false, error: '', result });
+                } catch (error) {
+                    setAiAnalysis({ open: true, loading: false, error: error.message, result: null });
+                }
+            };
+
+            const handleImport = async () => {
+                const text = document.getElementById('importArea').value;
+                const trimmed = text.trim();
+                const items = trimmed
+                    ? trimmed.split('\n').map(line => {
+                        const [d, c, n, a] = line.split(',').map(s => s.trim());
+                        return (d && a) ? { date: d, category: c, name: n, amount: parseFloat(a) } : null;
+                    }).filter(Boolean)
+                    : [];
+                try {
+                    await api.post('/api/ledger/import', { items });
+                    document.getElementById('importArea').value = '';
+                    await refreshAll('导入成功');
+                } catch (error) {
+                    showError(error);
+                }
+            };
+
+            const dayTotal = dayLedger.reduce((sum, item) => sum + safeNumber(item.amount), 0);
+            const monthTotal = monthLedger.reduce((sum, item) => sum + safeNumber(item.amount), 0);
+            const monthAveragePerDay = monthLedger.length ? monthTotal / new Set(monthLedger.map(item => item.date)).size : 0;
+            const monthRankingToShow = showMonthRankingAll ? monthRanking : monthRanking.slice(0, 10);
+            const yearRankingToShow = showYearRankingAll ? yearRanking : yearRanking.slice(0, 10);
+
+            if (!token) return <Auth onLogin={() => setToken(localStorage.getItem('token'))} />;
+            if (loading) return <div className="flex justify-center items-center h-screen text-blue-500">加载中...</div>;
+
+            return (
+                <div className="max-w-4xl mx-auto p-4 pb-24 md:pb-10">
+                    <div className="flex justify-between items-start mb-6 gap-3">
+                        <div>
+                            <h1 className="text-xl font-black text-gray-800 tracking-tight">财务指挥中心</h1>
+                            <p className="text-xs text-gray-400">{currentMonth}</p>
+                            <p className="text-xs text-gray-400 mt-1">最近刷新：{refreshTime || '未刷新'}（北京时间）</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <DataMenu onExportJSON={exportJSON} onExportCSV={exportCSV} onOpenAISettings={() => setShowAISettings(true)} />
+                            <input type="month" className="bg-white border rounded px-2 py-1 text-sm" value={currentMonth} onChange={e => setCurrentMonth(e.target.value)} />
+                            <button onClick={() => { localStorage.removeItem('token'); api.token = ''; setToken(null); }} className="p-2 text-gray-400 hover:text-red-500"><i data-lucide="log-out" className="w-5 h-5"></i></button>
+                        </div>
+                    </div>
+
+                    <Notice notice={notice} />
+
+                    <div className="bg-white p-1 rounded-xl shadow-sm flex mb-6 overflow-x-auto">
+                        {['dashboard', 'subs', 'ledger', 'stats'].map(t => (
+                            <button key={t} onClick={() => setActiveTab(t)} className={'flex-1 py-2 px-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ' + (activeTab === t ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:bg-gray-50')}>
+                                {t === 'dashboard' ? '仪表盘' : t === 'subs' ? '订阅/连载' : t === 'ledger' ? '账单明细' : '统计'}
+                            </button>
+                        ))}
+                    </div>
+
+                    {activeTab === 'dashboard' && (
+                        <div className="space-y-4 animate-fade-in">
+                            {subStats.warnings.length > 0 && (
+                                <div className="bg-red-50 p-4 rounded-xl border border-red-100 flex items-start gap-3">
+                                    <div className="bg-red-100 p-2 rounded-full text-red-600"><i data-lucide="alert-triangle" className="w-5 h-5"></i></div>
+                                    <div>
+                                        <h3 className="font-bold text-red-800">现金流警告</h3>
+                                        <div className="text-sm text-red-600 mt-1">
+                                            {subStats.warnings.map(s => <div key={s.id}>{s.name} 本月需扣款 <b>¥{formatMoney(s.price)}</b></div>)}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div className="card border-t-4 border-blue-500">
+                                    <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">本月预算</div>
+                                    <div className="flex items-baseline mt-2">
+                                        <span className="text-2xl font-bold">¥</span>
+                                        <input
+                                            type="number"
+                                            className="text-3xl font-black w-full outline-none"
+                                            value={data.budget}
+                                            onBlur={e => api.post('/api/budget', { month: currentMonth, amount: parseFloat(e.target.value || '0') }).then(() => refreshAll('预算已保存')).catch(showError)}
+                                            onChange={e => setData({ ...data, budget: e.target.value })}
+                                        />
+                                    </div>
+                                </div>
+                                <div className="card border-t-4 border-yellow-500">
+                                    <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">预期消费</div>
+                                    <div className="mt-2 text-3xl font-black">¥{formatMoney(subStats.cost + plannedSerialCost, 0)}</div>
+                                    <div className="text-xs text-gray-400 mt-1">订阅 {formatMoney(subStats.cost, 0)} + 连载 {formatMoney(plannedSerialCost, 0)}</div>
+                                    <div className="text-xs text-gray-400 mt-1">
+                                        已计入订阅 {actualSubscriptionLedger.length} / 预期消费 {formatMoney(subStats.cost + plannedSerialCost, 0)}
+                                    </div>
+                                </div>
+                                <div className={'card border-t-4 ' + (actual.total > data.budget ? 'border-red-500' : 'border-green-500')}>
+                                    <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">实际支出</div>
+                                    <div className={'mt-2 text-3xl font-black ' + (actual.total > data.budget ? 'text-red-600' : 'text-green-600')}>¥{formatMoney(actual.total, 0)}</div>
+                                    <div className="text-xs text-gray-400 mt-1">{actual.total > data.budget ? '已超支' : '安全范围'}</div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {activeTab === 'subs' && (
+                        <div className="space-y-6">
+                            <div className="card">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h2 className="font-bold text-lg">📦 连载追更</h2>
+                                    <button onClick={() => {
+                                        const name = prompt('名称'); if (!name) return;
+                                        api.post('/api/serials', { name, price: 0, status: 'planned', expected_release_date: currentMonth }).then(() => refreshAll('连载已新增')).catch(showError);
+                                    }} className="btn btn-primary text-xs">+ 新增</button>
+                                </div>
+                                <div className="space-y-3">
+                                    {data.serials.map(s => (
+                                        <div key={s.id} className="flex justify-between items-center py-2 border-b last:border-0 border-gray-100">
+                                            <div>
+                                                <div className="font-medium">{s.name}</div>
+                                                <div className="text-xs text-gray-400">{s.expected_release_date} · {SERIAL_STATUS_LABELS[s.status] || s.status}</div>
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <div className="font-bold">¥{formatMoney(s.price)}</div>
+                                                {s.status !== 'paid' && <button onClick={() => setAdvancingSerial(s)} className="text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded-full font-medium hover:bg-blue-100">结算本期</button>}
+                                                <button onClick={() => confirm('删?') && api.delete('/api/serials/' + s.id).then(() => refreshAll('连载已删除')).catch(showError)} className="text-gray-300 hover:text-red-500"><i data-lucide="trash-2" className="w-4 h-4"></i></button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {data.serials.length === 0 && <p className="text-center text-gray-300 py-4">无追更计划</p>}
+                                </div>
+                            </div>
+
+                            <div className="card">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h2 className="font-bold text-lg">📅 固定订阅</h2>
+                                    <button onClick={() => {
+                                        const name = prompt('名称'); if (!name) return;
+                                        const price = prompt('金额');
+                                        if (price === null) return;
+                                        const cycle = prompt('周期 (monthly/yearly/quarterly)', 'monthly');
+                                        if (!cycle) return;
+                                        const renewalDate = prompt('续订时间 (YYYY-MM-DD)', today());
+                                        if (!renewalDate) return;
+                                        api.post('/api/subscriptions', { name, price, cycle_type: cycle, first_payment_date: renewalDate, is_active: 1 }).then(() => refreshAll('订阅已新增')).catch(showError);
+                                    }} className="btn btn-ghost text-xs border">+ 新增</button>
+                                </div>
+                                {data.subscriptions.map(s => (
+                                    <div key={s.id} className="py-3 border-b last:border-0 border-gray-100">
+                                        <div className="flex justify-between items-start gap-3">
+                                            <div>
+                                                <div className="font-medium">{s.name}</div>
+                                                <div className="text-xs text-gray-400 mt-1">{s.cycle_type} · 续订 {s.first_payment_date || '未设置'}</div>
+                                                <div className="text-xs mt-2 inline-flex items-center px-2 py-1 rounded-full bg-gray-50 text-gray-500 border border-gray-200">
+                                                    {Number(s.is_active) ? '订阅中' : '未订阅'}
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <div className="font-bold">¥{formatMoney(s.price)}</div>
+                                                <button onClick={() => confirm('删?') && api.delete('/api/subscriptions/' + s.id).then(() => refreshAll('订阅已删除')).catch(showError)} className="text-gray-300 hover:text-red-500"><i data-lucide="trash-2" className="w-4 h-4"></i></button>
+                                            </div>
+                                        </div>
+                                        <div className="mt-3 flex flex-col md:flex-row md:items-center gap-3">
+                                            <label className="flex items-center gap-2 text-sm text-gray-600">
+                                                <span>续订时间</span>
+                                                <input
+                                                    type="date"
+                                                    className="input text-sm py-1.5"
+                                                    value={s.first_payment_date || ''}
+                                                    onChange={e => {
+                                                        const renewalDate = e.target.value;
+                                                        if (!renewalDate) return;
+                                                        updateSubscriptionRenewalDate(s, renewalDate);
+                                                    }}
+                                                />
+                                            </label>
+                                            <label className="flex items-center gap-3 text-sm text-gray-600">
+                                                <span>订阅开关</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => toggleSubscription(s, !Number(s.is_active))}
+                                                    className={'relative inline-flex h-7 w-12 items-center rounded-full transition-colors ' + (Number(s.is_active) ? 'bg-blue-600' : 'bg-gray-300')}
+                                                >
+                                                    <span className={'inline-block h-5 w-5 transform rounded-full bg-white transition-transform ' + (Number(s.is_active) ? 'translate-x-6' : 'translate-x-1')}></span>
+                                                </button>
+                                                <span className="text-xs text-gray-400">
+                                                    {s.cycle_type === 'monthly'
+                                                        ? '开启后每月续订日自动记入实际账单'
+                                                        : s.cycle_type === 'yearly'
+                                                            ? '开启后继续在仪表盘提醒年度大额消费'
+                                                            : '开启后参与预期消费计算'}
+                                                </span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {activeTab === 'stats' && (
+                        <div className="space-y-4 animate-fade-in">
+                            <div className="card">
+                                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                                    <div>
+                                        <h2 className="font-bold text-lg">📊 统计中心</h2>
+                                        <p className="text-xs text-gray-400 mt-1">在这里切换日 / 月 / 年视图，并可发起 AI 分析。</p>
+                                    </div>
+                                    <button onClick={openAIAnalysis} className="btn btn-primary text-sm">🤖 AI 分析当前{statsMode === 'day' ? '日' : statsMode === 'month' ? '月' : '年'}支出</button>
+                                </div>
+
+                                <div className="bg-gray-100 rounded-xl p-1 flex gap-2 mt-4">
+                                    {[
+                                        ['day', '按日'],
+                                        ['month', '按月'],
+                                        ['year', '按年'],
+                                    ].map(([key, label]) => (
+                                        <button key={key} onClick={() => setStatsMode(key)} className={'flex-1 py-2 rounded-lg text-sm font-medium ' + (statsMode === key ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500')}>
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
+
+                                <div className="mt-4">
+                                    {statsMode === 'day' && <input type="date" className="input max-w-xs" value={currentDate} onChange={e => setCurrentDate(e.target.value)} />}
+                                    {statsMode === 'month' && <input type="month" className="input max-w-xs" value={currentMonth} onChange={e => setCurrentMonth(e.target.value)} />}
+                                    {statsMode === 'year' && <input type="number" className="input max-w-xs" min="2000" max="9999" value={currentYear} onChange={e => setCurrentYear(e.target.value.slice(0, 4))} />}
+                                </div>
+                            </div>
+
+                            {statsMode === 'day' && (
+                                <>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <div className="card border-t-4 border-blue-500">
+                                            <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">当日支出</div>
+                                            <div className="mt-2 text-3xl font-black">¥{formatMoney(dayTotal, 2)}</div>
+                                            <div className="text-xs text-gray-400 mt-1">{currentDate}</div>
+                                        </div>
+                                        <div className="card border-t-4 border-purple-500">
+                                            <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">当日笔数</div>
+                                            <div className="mt-2 text-3xl font-black">{dayLedger.length}</div>
+                                            <div className="text-xs text-gray-400 mt-1">北京时间</div>
+                                        </div>
+                                        <div className="card border-t-4 border-green-500">
+                                            <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">当日订阅支出</div>
+                                            <div className="mt-2 text-3xl font-black">¥{formatMoney(dayBreakdown.subscription, 2)}</div>
+                                            <div className="text-xs text-gray-400 mt-1">仅统计已入账订阅</div>
+                                        </div>
+                                    </div>
+
+                                    <div className="card">
+                                        <div className="flex justify-between items-center mb-4">
+                                            <h3 className="font-bold text-lg">🏅 当日支出排行</h3>
+                                            <span className="text-xs text-gray-400">按名称聚合</span>
+                                        </div>
+                                        <div className="space-y-3">
+                                            {dayRanking.length === 0 && <p className="text-center text-gray-300 py-4">当天暂无支出记录</p>}
+                                            {dayRanking.map((item, index) => (
+                                                <div key={`${item.category}-${item.name}`} className="flex items-center justify-between py-2 border-b last:border-0 border-gray-100">
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="w-7 h-7 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center text-xs font-bold">{index + 1}</span>
+                                                        <div>
+                                                            <div className="font-medium">{item.name}</div>
+                                                            <div className="text-xs text-gray-400">{CATEGORIES[item.category] || item.category} · {item.count}笔</div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="font-bold">¥{formatMoney(item.total, 2)}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div className="card">
+                                        <div className="flex justify-between items-center mb-4">
+                                            <h3 className="font-bold text-lg">🧾 当日记录</h3>
+                                            <span className="text-xs text-gray-400">可修改支出类型、金额、名称</span>
+                                        </div>
+                                        <div className="space-y-3">
+                                            {dayLedger.length === 0 && <p className="text-center text-gray-300 py-4">当天暂无记录</p>}
+                                            {dayLedger.sort((a, b) => safeNumber(b.amount) - safeNumber(a.amount)).map(item => (
+                                                <div key={item.id} className="flex justify-between items-center py-2 border-b last:border-0 border-gray-100">
+                                                    <div>
+                                                        <div className="font-medium">{item.name}</div>
+                                                        <div className="text-xs text-gray-400">{CATEGORIES[item.category] || item.category}</div>
+                                                    </div>
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="font-bold">¥{formatMoney(item.amount, 2)}</div>
+                                                        <button onClick={() => setEditingLedgerItem(item)} className="text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded-full font-medium hover:bg-blue-100">编辑</button>
+                                                        <button onClick={() => deleteLedgerItem(item.id)} className="text-gray-300 hover:text-red-500"><i data-lucide="trash-2" className="w-4 h-4"></i></button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+
+                            {statsMode === 'month' && (
+                                <>
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                        <div className="card border-t-4 border-blue-500">
+                                            <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">本月支出</div>
+                                            <div className="mt-2 text-3xl font-black">¥{formatMoney(monthTotal, 2)}</div>
+                                            <div className="text-xs text-gray-400 mt-1">{currentMonth}</div>
+                                        </div>
+                                        <div className="card border-t-4 border-yellow-500">
+                                            <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">预算</div>
+                                            <div className="mt-2 text-3xl font-black">¥{formatMoney(monthBudget, 2)}</div>
+                                            <div className="text-xs text-gray-400 mt-1">{monthTotal > monthBudget ? '已超支' : '预算内'}</div>
+                                        </div>
+                                        <div className="card border-t-4 border-purple-500">
+                                            <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">日均支出</div>
+                                            <div className="mt-2 text-3xl font-black">¥{formatMoney(monthAveragePerDay, 2)}</div>
+                                            <div className="text-xs text-gray-400 mt-1">按有支出日期平均</div>
+                                        </div>
+                                        <div className="card border-t-4 border-green-500">
+                                            <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">预计影响</div>
+                                            <div className="mt-2 text-3xl font-black">¥{formatMoney(subStats.cost + plannedSerialCost, 2)}</div>
+                                            <div className="text-xs text-gray-400 mt-1">订阅 + 连载计划</div>
+                                        </div>
+                                    </div>
+
+                                    <div className="card">
+                                        <div className="flex justify-between items-center mb-4">
+                                            <h3 className="font-bold text-lg">📎 本月分类统计</h3>
+                                            <span className="text-xs text-gray-400">仅按已入账支出统计</span>
+                                        </div>
+                                        <div className="space-y-4">
+                                            {Object.entries(CATEGORIES).map(([key, label]) => {
+                                                const amount = monthBreakdown[key] || 0;
+                                                const percent = monthTotal > 0 ? (amount / monthTotal * 100).toFixed(1) : '0.0';
+                                                return (
+                                                    <div key={key}>
+                                                        <div className="flex justify-between items-center mb-1">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="text-xl">{CAT_ICONS[key]}</span>
+                                                                <span className="font-medium text-gray-700">{label}</span>
+                                                            </div>
+                                                            <div className="text-right">
+                                                                <div className="font-bold">¥{formatMoney(amount, 2)}</div>
+                                                                <div className="text-xs text-gray-400">{percent}%</div>
+                                                            </div>
+                                                        </div>
+                                                        <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
+                                                            <div className="h-full bg-blue-500 rounded-full" style={{ width: percent + '%' }}></div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+
+                                    <div className="card">
+                                        <div className="flex justify-between items-center mb-4">
+                                            <h3 className="font-bold text-lg">🏅 当月支出排行</h3>
+                                            {monthRanking.length > 10 && (
+                                                <button onClick={() => setShowMonthRankingAll(!showMonthRankingAll)} className="text-xs text-blue-600 font-medium">
+                                                    {showMonthRankingAll ? '收起' : '展开全部'}
+                                                </button>
+                                            )}
+                                        </div>
+                                        <div className="space-y-3">
+                                            {monthRanking.length === 0 && <p className="text-center text-gray-300 py-4">本月暂无支出排行</p>}
+                                            {monthRankingToShow.map((item, index) => (
+                                                <div key={`${item.category}-${item.name}`} className="flex items-center justify-between py-2 border-b last:border-0 border-gray-100">
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="w-7 h-7 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center text-xs font-bold">{index + 1}</span>
+                                                        <div>
+                                                            <div className="font-medium">{item.name}</div>
+                                                            <div className="text-xs text-gray-400">{CATEGORIES[item.category] || item.category} · {item.count}笔</div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="font-bold">¥{formatMoney(item.total, 2)}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+
+                            {statsMode === 'year' && (
+                                <>
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                        <div className="card border-t-4 border-blue-500">
+                                            <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">年度总支出</div>
+                                            <div className="mt-2 text-3xl font-black">¥{formatMoney(yearTotal, 2)}</div>
+                                            <div className="text-xs text-gray-400 mt-1">{currentYear} 年</div>
+                                        </div>
+                                        <div className="card border-t-4 border-yellow-500">
+                                            <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">月均支出</div>
+                                            <div className="mt-2 text-3xl font-black">¥{formatMoney(yearTotal / 12, 2)}</div>
+                                            <div className="text-xs text-gray-400 mt-1">按 12 个月平均</div>
+                                        </div>
+                                        <div className="card border-t-4 border-purple-500">
+                                            <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">最高支出月份</div>
+                                            <div className="mt-2 text-2xl font-black">{maxYearMonth ? maxYearMonth.month : '--'}</div>
+                                            <div className="text-xs text-gray-400 mt-1">{maxYearMonth ? `¥${formatMoney(maxYearMonth.total, 2)}` : '暂无数据'}</div>
+                                        </div>
+                                        <div className="card border-t-4 border-green-500">
+                                            <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">年度笔数</div>
+                                            <div className="mt-2 text-3xl font-black">{yearLedger.length}</div>
+                                            <div className="text-xs text-gray-400 mt-1">已入账记录</div>
+                                        </div>
+                                    </div>
+
+                                    <div className="card">
+                                        <div className="flex justify-between items-center mb-4">
+                                            <h3 className="font-bold text-lg">🗓️ 年度月度支出</h3>
+                                            <span className="text-xs text-gray-400">按月份汇总</span>
+                                        </div>
+                                        <div className="space-y-3">
+                                            {yearMonthlyTotals.length === 0 && <p className="text-center text-gray-300 py-4">本年度暂无支出</p>}
+                                            {yearMonthlyTotals.map(item => {
+                                                const percent = maxYearMonth && maxYearMonth.total > 0 ? (item.total / maxYearMonth.total * 100).toFixed(1) : '0.0';
+                                                return (
+                                                    <div key={item.month}>
+                                                        <div className="flex justify-between items-center mb-1">
+                                                            <div className="font-medium text-gray-700">{item.month}</div>
+                                                            <div className="text-right">
+                                                                <div className="font-bold">¥{formatMoney(item.total, 2)}</div>
+                                                                <div className="text-xs text-gray-400">{percent}%</div>
+                                                            </div>
+                                                        </div>
+                                                        <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
+                                                            <div className="h-full bg-blue-500 rounded-full" style={{ width: percent + '%' }}></div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+
+                                    <div className="card">
+                                        <div className="flex justify-between items-center mb-4">
+                                            <h3 className="font-bold text-lg">🏅 年度支出排行</h3>
+                                            {yearRanking.length > 10 && (
+                                                <button onClick={() => setShowYearRankingAll(!showYearRankingAll)} className="text-xs text-blue-600 font-medium">
+                                                    {showYearRankingAll ? '收起' : '展开全部'}
+                                                </button>
+                                            )}
+                                        </div>
+                                        <div className="space-y-3">
+                                            {yearRanking.length === 0 && <p className="text-center text-gray-300 py-4">本年度暂无排行</p>}
+                                            {yearRankingToShow.map((item, index) => (
+                                                <div key={`${item.category}-${item.name}`} className="flex items-center justify-between py-2 border-b last:border-0 border-gray-100">
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="w-7 h-7 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center text-xs font-bold">{index + 1}</span>
+                                                        <div>
+                                                            <div className="font-medium">{item.name}</div>
+                                                            <div className="text-xs text-gray-400">{CATEGORIES[item.category] || item.category} · {item.count}笔</div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="font-bold">¥{formatMoney(item.total, 2)}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div className="card">
+                                        <div className="flex justify-between items-center mb-4">
+                                            <h3 className="font-bold text-lg">📎 年度分类统计</h3>
+                                            <span className="text-xs text-gray-400">按已入账支出汇总</span>
+                                        </div>
+                                        <div className="space-y-4">
+                                            {Object.entries(CATEGORIES).map(([key, label]) => {
+                                                const amount = yearBreakdown[key] || 0;
+                                                const percent = yearTotal > 0 ? (amount / yearTotal * 100).toFixed(1) : '0.0';
+                                                return (
+                                                    <div key={key}>
+                                                        <div className="flex justify-between items-center mb-1">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="text-xl">{CAT_ICONS[key]}</span>
+                                                                <span className="font-medium text-gray-700">{label}</span>
+                                                            </div>
+                                                            <div className="text-right">
+                                                                <div className="font-bold">¥{formatMoney(amount, 2)}</div>
+                                                                <div className="text-xs text-gray-400">{percent}%</div>
+                                                            </div>
+                                                        </div>
+                                                        <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
+                                                            <div className="h-full bg-blue-500 rounded-full" style={{ width: percent + '%' }}></div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    )}
+
+                    {activeTab === 'ledger' && (
+                        <div className="space-y-6">
+                            {groupedLedger.map(([date, items]) => {
+                                const dailyTotal = items.reduce((sum, i) => sum + safeNumber(i.amount), 0);
+                                return (
+                                    <div key={date} className="bg-white p-4 rounded-xl shadow-sm">
+                                        <div className="flex justify-between items-center mb-3 pb-2 border-b border-gray-100">
+                                            <span className="font-bold text-gray-700 flex items-center gap-2">
+                                                <i data-lucide="calendar" className="w-4 h-4 text-gray-400"></i>
+                                                {date}
+                                            </span>
+                                            <span className="font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded text-sm">¥{formatMoney(dailyTotal, 2)}</span>
+                                        </div>
+                                        <div className="flex flex-wrap gap-2">
+                                            {items.map(item => (
+                                                <span key={item.id} className="inline-flex items-center gap-2 bg-gray-50 border border-gray-200 px-3 py-1.5 rounded-lg text-sm hover:bg-gray-100 transition-colors">
+                                                    <span className="text-lg leading-none">{CAT_ICONS[item.category] || '💰'}</span>
+                                                    <span className="font-medium text-gray-700">{item.name}</span>
+                                                    <span className="text-gray-400 font-mono text-xs">¥{formatMoney(item.amount, 2)}</span>
+                                                    <button onClick={() => setEditingLedgerItem(item)} className="text-blue-500 text-xs">编辑</button>
+                                                    <button onClick={() => deleteLedgerItem(item.id)} className="ml-1 text-gray-300 hover:text-red-500 text-lg leading-none focus:outline-none">&times;</button>
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+
+                            {data.ledger.length === 0 && (
+                                <div className="text-center py-10 text-gray-400">
+                                    <div className="text-4xl mb-2">🍃</div>
+                                    本月暂无账单
+                                </div>
+                            )}
+
+                            <div className="bg-white p-5 rounded-xl shadow-sm mt-8 border border-dashed border-gray-300">
+                                <h3 className="text-xs font-bold text-gray-400 uppercase mb-2">批量导入</h3>
+                                <textarea id="importArea" className="input text-xs font-mono h-20" placeholder={'格式: 2026-04-01, food, 午餐, 20\n换行分隔'}></textarea>
+                                <button onClick={handleImport} className="btn btn-ghost text-xs w-full mt-2">导入 CSV 文本</button>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="fab">
+                        <button onClick={() => setShowQuickAdd(true)} className="fab-btn">
+                            <i data-lucide="plus"></i>
+                        </button>
+                    </div>
+
+                    {showQuickAdd && <QuickAdd onClose={() => setShowQuickAdd(false)} onSave={handleQuickAdd} />}
+                    {advancingSerial && <SerialAdvance serial={advancingSerial} onClose={() => setAdvancingSerial(null)} onConfirm={handleAdvanceSerial} />}
+                    {editingLedgerItem && <EditLedgerModal item={editingLedgerItem} onClose={() => setEditingLedgerItem(null)} onSave={updateLedgerItem} />}
+                    {showAISettings && <AISettingsModal settings={aiSettings} saving={savingAISettings} onClose={() => setShowAISettings(false)} onChange={(key, value) => setAiSettings({ ...aiSettings, [key]: value })} onSave={saveAISettings} />}
+                    {aiAnalysis.open && <AIAnalysisModal state={aiAnalysis} scopeLabel={statsMode === 'day' ? currentDate : statsMode === 'month' ? currentMonth : currentYear + ' 年'} onClose={() => setAiAnalysis({ open: false, loading: false, error: '', result: null })} />}
+                </div>
+            );
+        }
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

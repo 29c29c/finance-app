@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+*.log
+coverage/
+dist/
+.DS_Store
+Thumbs.db
+finance_backup_*.json
+ledger_*.csv
