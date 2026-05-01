@@ -341,7 +341,7 @@ test('stores AI settings and caches latest analyses by scope and period', async 
     body: {
       provider: 'deepseek',
       endpointUrl: 'https://api.deepseek.com/v1/chat/completions',
-      model: 'deepseek-chat',
+      model: 'deepseek-v4-flash',
       apiKey: 'deepseek-test-key',
     },
   });
@@ -391,7 +391,7 @@ test('stores AI settings and caches latest analyses by scope and period', async 
 
   assert.equal(analysisResponse.status, 200);
   assert.equal(analysisResponse.data.provider, 'deepseek');
-  assert.equal(analysisResponse.data.model, 'deepseek-chat');
+  assert.equal(analysisResponse.data.model, 'deepseek-v4-flash');
   assert.match(analysisResponse.data.analysis, /月度分析 v1/);
   assert.equal(analysisResponse.data.summary.scope, 'month');
   assert.equal(analysisResponse.data.summary.label, '2026-04');

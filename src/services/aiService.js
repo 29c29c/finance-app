@@ -10,6 +10,22 @@ const CATEGORY_LABELS = {
   subscription: '订阅',
 };
 
+const DEFAULT_AI_SETTINGS = {
+  provider: 'deepseek',
+  endpointUrl: 'https://api.deepseek.com/v1/chat/completions',
+  model: 'deepseek-v4-flash',
+};
+
+const DEEPSEEK_MODEL_ALIASES = {
+  'deepseek-chat': 'deepseek-v4-flash',
+  'deepseek-reasoner': 'deepseek-v4-flash',
+};
+
+function normalizeDeepSeekModel(provider, model) {
+  if (provider !== 'deepseek') return model;
+  return DEEPSEEK_MODEL_ALIASES[model] || model;
+}
+
 function getBeijingIsoString() {
   const now = new Date();
   const formatter = new Intl.DateTimeFormat('sv-SE', {
@@ -397,18 +413,19 @@ function loadAndValidatePayload(payload) {
 function normalizeStoredSettings(settings) {
   if (!settings) {
     return {
-      provider: 'deepseek',
-      endpointUrl: 'https://api.deepseek.com/v1/chat/completions',
-      model: 'deepseek-chat',
+      ...DEFAULT_AI_SETTINGS,
       hasApiKey: false,
       updatedAt: null,
     };
   }
 
   return {
-    provider: settings.provider || 'deepseek',
-    endpointUrl: settings.endpoint_url || 'https://api.deepseek.com/v1/chat/completions',
-    model: settings.model || 'deepseek-chat',
+    provider: settings.provider || DEFAULT_AI_SETTINGS.provider,
+    endpointUrl: settings.endpoint_url || DEFAULT_AI_SETTINGS.endpointUrl,
+    model: normalizeDeepSeekModel(
+      settings.provider || DEFAULT_AI_SETTINGS.provider,
+      settings.model || DEFAULT_AI_SETTINGS.model,
+    ),
     hasApiKey: Boolean(settings.api_key),
     updatedAt: settings.updated_at || null,
   };
@@ -461,6 +478,7 @@ function createAiService({ db, fetchImpl = (...args) => global.fetch(...args) })
         throw new ValidationError('请先在 AI 设置中填写 API Key');
       }
 
+      settings.model = normalizeDeepSeekModel(settings.provider, settings.model);
       const allData = await financeRepository.getExportData(db, userId);
       const summary = buildAnalysisSummary(normalizedPayload.scope, normalizedPayload, allData);
       const prompt = buildPrompt(summary);

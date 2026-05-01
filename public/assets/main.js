@@ -50,7 +50,7 @@
         const [aiSettings, setAiSettings] = useState({
             provider: 'deepseek',
             endpointUrl: 'https://api.deepseek.com/v1/chat/completions',
-            model: 'deepseek-chat',
+            model: 'deepseek-v4-flash',
             apiKey: '',
             hasApiKey: false,
             updatedAt: null,
@@ -81,7 +81,7 @@
                     ...prev,
                     provider: res.provider || 'deepseek',
                     endpointUrl: res.endpointUrl || 'https://api.deepseek.com/v1/chat/completions',
-                    model: res.model || 'deepseek-chat',
+                    model: res.model || 'deepseek-v4-flash',
                     apiKey: '',
                     hasApiKey: !!res.hasApiKey,
                     updatedAt: res.updatedAt || null,

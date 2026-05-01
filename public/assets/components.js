@@ -217,7 +217,7 @@
                         </div>
                         <div>
                             <label className="text-xs text-gray-500 mb-1 block">模型</label>
-                            <input className="input" value={settings.model} onChange={e => onChange('model', e.target.value)} placeholder="deepseek-chat" />
+                            <input className="input" value={settings.model} onChange={e => onChange('model', e.target.value)} placeholder="deepseek-v4-flash" />
                         </div>
                         <div>
                             <label className="text-xs text-gray-500 mb-1 block">API Key {settings.hasApiKey && <span className="text-green-500">（已保存，可留空不改）</span>}</label>
