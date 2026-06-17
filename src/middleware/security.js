@@ -9,7 +9,7 @@ function applySecurityHeaders(_config) {
         "font-src 'self'",
         "img-src 'self' data: blob:",
         "object-src 'none'",
-        "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com",
+        "script-src 'self' 'unsafe-inline'",
         "style-src 'self' 'unsafe-inline'",
         "form-action 'self'",
         "frame-ancestors 'none'",
