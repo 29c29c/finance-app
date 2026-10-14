@@ -1312,7 +1312,10 @@ svg {
 }
 .overlay {
   position:fixed;
-  inset:0;
+  top:var(--modal-viewport-top, 0px);
+  left:var(--modal-viewport-left, 0px);
+  width:var(--modal-viewport-width, 100%);
+  height:var(--modal-viewport-height, 100dvh);
   background:#12241955;
   backdrop-filter:blur(5px);
   display:flex;
@@ -1322,22 +1325,31 @@ svg {
   z-index:100
 }
 .modal {
+  display:flex;
+  flex-direction:column;
   background:white;
   width:100%;
   max-width:460px;
-  max-height:calc(100dvh - 48px);
-  overflow-y:auto;
-  overscroll-behavior:contain;
+  max-height:calc(var(--modal-viewport-height, 100dvh) - 48px);
+  overflow:hidden;
   border-radius:20px;
   padding:27px 28px;
   box-shadow:0 24px 80px #11271930;
   animation:modal-in .2s ease-out;
   outline:0
 }
+.modal-body {
+  min-height:0;
+  overflow-y:auto;
+  overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;
+  scroll-padding:12px;
+}
 .modal-wide {
   max-width:620px
 }
 .modal-header {
+  flex-shrink:0;
   display:flex;
   align-items:flex-start;
   gap:16px;
@@ -1359,6 +1371,7 @@ svg {
   margin:-4px -8px 0 0
 }
 .sheet-handle {
+  flex-shrink:0;
   display:none
 }
 .field {
@@ -2385,7 +2398,7 @@ svg {
   }
   .modal {
     border-radius:22px 22px 0 0;
-    max-height:calc(100dvh - 20px);
+    max-height:calc(var(--modal-viewport-height, 100dvh) - 12px);
     padding:12px 22px calc(24px + env(safe-area-inset-bottom));
     animation:modal-in .22s ease-out
   }
@@ -2449,10 +2462,10 @@ svg {
   .form-grid .input {
     padding-left:9px;
     padding-right:9px;
-    font-size:14px
+    font-size:16px
   }
   .csv-input {
-    font-size:12px
+    font-size:16px
   }
   .auth-page {
     display:block;
@@ -2710,3 +2723,18 @@ svg {
   .upcoming-panel .panel-heading { min-height: 28px; margin-bottom: 8px; }
   .upcoming-item { padding-top: 6px; padding-bottom: 6px; }
 }
+/* Touch devices need the same keyboard-safe sheet even in landscape orientation. */
+@media (pointer: coarse) {
+  .overlay { padding: 0; align-items: flex-end; }
+  .modal {
+    border-radius: 22px 22px 0 0;
+    max-height: calc(var(--modal-viewport-height, 100dvh) - 12px);
+    padding: 12px 22px calc(24px + env(safe-area-inset-bottom));
+  }
+  .modal input, .modal select, .modal textarea, .modal .csv-input { font-size: 16px; }
+}
+/* Use the actual visible height here; a layout-height media query misses mobile keyboards. */
+.overlay[data-compact="true"] .sheet-handle,
+.overlay[data-compact="true"] .modal-header p { display: none; }
+.overlay[data-compact="true"] .modal { padding-top: 12px; padding-bottom: 12px; }
+.overlay[data-compact="true"] .modal-header { margin-bottom: 12px; }

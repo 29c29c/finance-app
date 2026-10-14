@@ -102,16 +102,34 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     busy = false
   }) {
     const ref = useRef(null);
+    const overlayRef = useRef(null);
+    const bodyRef = useRef(null);
     const closeRef = useRef(onClose);
     const busyRef = useRef(busy);
     closeRef.current = onClose;
     busyRef.current = busy;
     useEffect(() => {
       const previous = document.activeElement;
-      const overflow = document.body.style.overflow;
+      const mobile = window.matchMedia('(max-width: 760px), (pointer: coarse)').matches;
+      const scrollX = window.scrollX,
+        scrollY = window.scrollY;
+      const savedBodyStyles = Object.fromEntries(['overflow', 'position', 'top', 'left', 'width'].map(key => [key, document.body.style[key]]));
+      const htmlOverflow = document.documentElement.style.overflow;
       document.body.style.overflow = 'hidden';
-      const first = ref.current.querySelector('[data-autofocus]') || ref.current.querySelector('input, select, textarea') || ref.current;
-      first.focus();
+      document.documentElement.style.overflow = 'hidden';
+      if (mobile) {
+        Object.assign(document.body.style, {
+          position: 'fixed',
+          top: `${-scrollY}px`,
+          left: `${-scrollX}px`,
+          width: '100%'
+        });
+      }
+      const unbindViewport = F.bindModalViewport(overlayRef.current, bodyRef.current);
+      const first = mobile ? ref.current : ref.current.querySelector('[data-autofocus]') || ref.current.querySelector('input, select, textarea') || ref.current;
+      first.focus({
+        preventScroll: true
+      });
       const handleKey = e => {
         if (e.key === 'Escape' && !busyRef.current) closeRef.current();
         if (e.key !== 'Tab') return;
@@ -120,20 +138,34 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
           last = elements[elements.length - 1];
         if (e.shiftKey && (document.activeElement === first || document.activeElement === ref.current)) {
           e.preventDefault();
-          last?.focus();
+          last?.focus({
+            preventScroll: true
+          });
         } else if (!e.shiftKey && document.activeElement === last) {
           e.preventDefault();
-          first?.focus();
+          first?.focus({
+            preventScroll: true
+          });
         }
       };
       document.addEventListener('keydown', handleKey);
       return () => {
-        document.body.style.overflow = overflow;
+        unbindViewport();
+        Object.assign(document.body.style, savedBodyStyles);
+        document.documentElement.style.overflow = htmlOverflow;
         document.removeEventListener('keydown', handleKey);
-        previous?.focus();
+        if (mobile) window.scrollTo({
+          left: scrollX,
+          top: scrollY,
+          behavior: 'instant'
+        });
+        previous?.focus({
+          preventScroll: true
+        });
       };
     }, []);
     return React.createElement("div", {
+      ref: overlayRef,
       className: "overlay",
       onClick: e => !busy && e.target === e.currentTarget && onClose()
     }, React.createElement("section", {
@@ -157,7 +189,10 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       onClick: onClose
     }, React.createElement(Icon, {
       name: "x"
-    }))), children));
+    }))), React.createElement("div", {
+      ref: bodyRef,
+      className: "modal-body"
+    }, children)));
   }
   function useSubmit() {
     const [busy, setBusy] = useState(false),
@@ -371,7 +406,9 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
             name: ''
           }));
           setSaved('已保存，再记一笔吧');
-          requestAnimationFrame(() => amountRef.current?.focus());
+          requestAnimationFrame(() => amountRef.current?.focus({
+            preventScroll: true
+          }));
         } else onClose();
       });
     };
