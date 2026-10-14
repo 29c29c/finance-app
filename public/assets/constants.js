@@ -6,7 +6,7 @@
     const BEIJING_TZ = 'Asia/Shanghai';
     const CATEGORIES = { shopping: '购物/连载', food: '食品', transport: '交通', subscription: '订阅' };
     const CAT_ICONS = { shopping: '🛍️', food: '🍔', transport: '🚗', subscription: '📅' };
-    const SERIAL_STATUS_LABELS = { planned: 'planned', ordered: 'ordered', paid: 'paid', delayed: 'delayed' };
+    const SERIAL_STATUS_LABELS = { planned: '待购入', ordered: '已预订', paid: '已付款', delayed: '已延期' };
 
     const getParts = (date = new Date()) => {
         const parts = new Intl.DateTimeFormat('en-CA', {

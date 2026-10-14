@@ -11,7 +11,12 @@
         async req(url, method, body) {
             const options = { method, headers: this.headers() };
             if (body !== undefined) options.body = JSON.stringify(body);
-            const res = await fetch(url, options);
+            let res;
+            try {
+                res = await fetch(url, options);
+            } catch (_error) {
+                throw new Error('连接服务器失败，请检查网络后重试');
+            }
             let data = {};
             try { data = await res.json(); } catch (_error) {}
             if (!res.ok) {

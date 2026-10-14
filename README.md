@@ -101,6 +101,18 @@ node app.js
 npm test
 ```
 
+### 前端开发
+
+前端采用本地 React 与原生 CSS，源文件在 `public/assets/`。修改 JSX 后运行：
+
+```bash
+npm run build
+```
+
+构建使用仓库内已有的 Babel，将结果写入 `public/assets/compiled/`，浏览器无需运行时编译。`npm start` 会自动执行构建；直接使用 `node app.js` 时请确保编译产物已更新。部署时保留 `public/assets/compiled/` 与 `public/vendor/`。
+
+重构后的界面包含桌面侧栏、移动底栏、连续记账、搜索筛选、订阅/连载编辑、CSV 导入预览和原有统计/AI 功能。业务口径、模块结构及验证记录见 [前端重构说明](docs/frontend-redesign.md)。
+
 ## 环境变量
 
 项目支持的主要环境变量如下：
