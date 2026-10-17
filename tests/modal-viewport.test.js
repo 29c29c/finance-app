@@ -55,6 +55,8 @@ test('keyboard shrinks only the visual viewport: modal uses visible height and p
   f.viewport.dispatch('resize');
   f.viewport.dispatch('scroll');
   assert.equal(f.frames.size, 1, 'resize and pan updates share one animation frame');
+  assert.equal(f.values.get('--modal-viewport-height'), '480px', 'keyboard bounds update even before animation frames resume');
+  assert.equal(f.values.get('--modal-viewport-top'), '64px');
   f.flush();
   assert.equal(f.environment.innerHeight, 844, 'layout viewport remains unchanged');
   assert.equal(f.values.get('--modal-viewport-height'), '480px');

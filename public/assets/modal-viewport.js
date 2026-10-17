@@ -30,15 +30,16 @@
         };
 
         const schedule = () => {
+            // Keyboard/native-picker transitions can delay animation frames in WebViews.
+            // Apply the visible bounds immediately; defer only focus scrolling until layout settles.
+            update();
             if (frame !== null) return;
             frame = environment.requestAnimationFrame(() => {
                 frame = null;
-                update();
                 keepInputVisible();
             });
         };
 
-        update();
         schedule();
         viewport?.addEventListener('resize', schedule);
         viewport?.addEventListener('scroll', schedule);

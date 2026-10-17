@@ -99,7 +99,10 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     children,
     onClose,
     wide = false,
-    busy = false
+    busy = false,
+    compact = false,
+    autoFocusAmount = false,
+    footer
   }) {
     const ref = useRef(null);
     const overlayRef = useRef(null);
@@ -108,7 +111,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const busyRef = useRef(busy);
     closeRef.current = onClose;
     busyRef.current = busy;
-    useEffect(() => {
+    React.useLayoutEffect(() => {
       const previous = document.activeElement;
       const mobile = window.matchMedia('(max-width: 760px), (pointer: coarse)').matches;
       const scrollX = window.scrollX,
@@ -126,7 +129,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         });
       }
       const unbindViewport = F.bindModalViewport(overlayRef.current, bodyRef.current);
-      const first = mobile ? ref.current : ref.current.querySelector('[data-autofocus]') || ref.current.querySelector('input, select, textarea') || ref.current;
+      const first = mobile && !autoFocusAmount ? ref.current : ref.current.querySelector('[data-autofocus]') || ref.current.querySelector('input, select, textarea') || ref.current;
       first.focus({
         preventScroll: true
       });
@@ -174,7 +177,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       role: "dialog",
       "aria-modal": "true",
       "aria-labelledby": "modal-title",
-      className: `modal ${wide ? 'modal-wide' : ''}`
+      className: `modal ${wide ? 'modal-wide' : ''} ${compact ? 'modal-compact' : ''}`
     }, React.createElement("div", {
       className: "sheet-handle"
     }), React.createElement("header", {
@@ -192,7 +195,9 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }))), React.createElement("div", {
       ref: bodyRef,
       className: "modal-body"
-    }, children)));
+    }, children), footer && React.createElement("div", {
+      className: "modal-footer"
+    }, footer)));
   }
   function useSubmit() {
     const [busy, setBusy] = useState(false),
@@ -383,6 +388,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }));
     const [saved, setSaved] = useState('');
     const amountRef = useRef(null);
+    const formRef = useRef(null);
+    const formId = React.useId();
     const {
       busy,
       error,
@@ -390,7 +397,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     } = useSubmit();
     const submit = (e, continuing = false) => {
       e.preventDefault();
-      if (!e.currentTarget.closest('form').reportValidity()) return;
+      if (!formRef.current.reportValidity()) return;
       setSaved('');
       run(async () => {
         await onSave({
@@ -412,12 +419,32 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         } else onClose();
       });
     };
+    const footer = React.createElement("div", {
+      className: "form-actions"
+    }, !item && React.createElement("button", {
+      type: "button",
+      className: "button secondary",
+      disabled: busy,
+      onClick: e => submit(e, true)
+    }, "\u4FDD\u5B58\u5E76\u7EE7\u7EED\u8BB0"), React.createElement("button", {
+      type: "submit",
+      form: formId,
+      className: "button primary",
+      disabled: busy
+    }, busy ? '保存中…' : '保存账单', React.createElement(Icon, {
+      name: "check",
+      size: 17
+    })));
     return React.createElement(Modal, {
       title: item ? '编辑账单' : '记一笔',
-      subtitle: item ? '让每一笔记录都准确。' : '记录这一刻的小小支出。',
       onClose: onClose,
-      busy: busy
+      busy: busy,
+      compact: true,
+      autoFocusAmount: true,
+      footer: footer
     }, React.createElement("form", {
+      id: formId,
+      ref: formRef,
       onSubmit: submit,
       className: "expense-form"
     }, React.createElement(Field, {
@@ -458,11 +485,13 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       className: `category-icon ${key}`
     }, React.createElement(Icon, {
       name: key
-    })), React.createElement("span", null, label)))), React.createElement(Field, {
+    })), React.createElement("span", null, label)))), React.createElement("div", {
+      className: "compact-grid"
+    }, React.createElement(Field, {
       label: "\u540D\u79F0 / \u5907\u6CE8"
     }, React.createElement("input", {
       className: "input",
-      placeholder: "\u8FD9\u7B14\u94B1\u82B1\u5728\u4E86\u54EA\u91CC\uFF1F",
+      placeholder: "\u540D\u79F0\uFF08\u9009\u586B\uFF09",
       value: form.name,
       onChange: e => setForm({
         ...form,
@@ -480,27 +509,14 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         ...form,
         date: e.target.value
       })
-    })), item?.source_type === 'subscription' && React.createElement("p", {
+    }))), item?.source_type === 'subscription' && React.createElement("p", {
       className: "helper"
-    }, "\u8FD9\u6761\u8BB0\u5F55\u7531\u6708\u4ED8\u8BA2\u9605\u81EA\u52A8\u751F\u6210\u3002\u91D1\u989D\u6216\u65E5\u671F\u7684\u6C38\u4E45\u4FEE\u6539\u8BF7\u5230\u300C\u56FA\u5B9A\u8BA2\u9605\u300D\u4E2D\u64CD\u4F5C\u3002"), React.createElement(FormError, {
+    }, "\u81EA\u52A8\u8BA2\u9605\u8D26\u5355\uFF1B\u957F\u671F\u4FEE\u6539\u8BF7\u5230\u300C\u56FA\u5B9A\u8BA2\u9605\u300D\u3002"), React.createElement(FormError, {
       error: error
     }), saved && React.createElement("p", {
       className: "text-green",
       role: "status"
-    }, saved), React.createElement("div", {
-      className: "form-actions"
-    }, !item && React.createElement("button", {
-      type: "button",
-      className: "button secondary",
-      disabled: busy,
-      onClick: e => submit(e, true)
-    }, "\u4FDD\u5B58\u5E76\u7EE7\u7EED\u8BB0"), React.createElement("button", {
-      className: "button primary",
-      disabled: busy
-    }, busy ? '保存中…' : '保存账单', React.createElement(Icon, {
-      name: "check",
-      size: 17
-    })))));
+    }, saved)));
   }
   function PlanForm({
     kind,
@@ -510,6 +526,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     onSave
   }) {
     const subscription = kind === 'subscriptions';
+    const formId = React.useId();
     const [form, setForm] = useState(item || (subscription ? {
       name: '',
       price: '',
@@ -541,25 +558,33 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         onClose();
       });
     };
+    const footer = React.createElement("div", {
+      className: "form-actions"
+    }, React.createElement("button", {
+      type: "submit",
+      form: formId,
+      className: "button primary full",
+      disabled: busy
+    }, busy ? '保存中…' : '保存计划', React.createElement(Icon, {
+      name: "check",
+      size: 17
+    })));
     return React.createElement(Modal, {
       title: `${item ? '编辑' : '新增'}${subscription ? '订阅' : '连载计划'}`,
-      subtitle: subscription ? '把固定支出，提前安排好。' : '为下一期喜欢的作品，留一点预算。',
       onClose: onClose,
-      busy: busy
+      busy: busy,
+      compact: true,
+      autoFocusAmount: true,
+      footer: footer
     }, React.createElement("form", {
+      id: formId,
       onSubmit: submit
+    }, React.createElement("div", {
+      className: "compact-grid"
     }, React.createElement(Field, {
-      label: subscription ? '订阅名称' : '连载名称'
-    }, React.createElement("input", {
-      className: "input",
-      value: form.name,
-      onChange: e => set('name', e.target.value),
-      required: true,
-      maxLength: 120,
-      placeholder: subscription ? '例如 Apple Music' : '例如 三体·漫画第12卷'
-    })), React.createElement(Field, {
       label: subscription ? '每期金额' : '预计金额'
     }, React.createElement("input", {
+      "data-autofocus": true,
       className: "input",
       type: "number",
       inputMode: "decimal",
@@ -570,7 +595,16 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       value: form.price,
       onChange: e => set('price', e.target.value),
       placeholder: "0.00"
-    })), subscription ? React.createElement(React.Fragment, null, React.createElement("div", {
+    })), React.createElement(Field, {
+      label: subscription ? '订阅名称' : '连载名称'
+    }, React.createElement("input", {
+      className: "input",
+      value: form.name,
+      onChange: e => set('name', e.target.value),
+      required: true,
+      maxLength: 120,
+      placeholder: subscription ? '例如 Apple Music' : '例如 三体·漫画第12卷'
+    }))), subscription ? React.createElement(React.Fragment, null, React.createElement("div", {
       className: "form-grid"
     }, React.createElement(Field, {
       label: "\u652F\u4ED8\u5468\u671F"
@@ -592,7 +626,9 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       value: form.first_payment_date || '',
       onChange: e => set('first_payment_date', e.target.value),
       required: true
-    }))), React.createElement("label", {
+    }))), React.createElement("div", {
+      className: "subscription-options"
+    }, React.createElement("label", {
       className: "check-label"
     }, React.createElement("input", {
       type: "checkbox",
@@ -600,7 +636,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       onChange: e => set('is_active', e.target.checked ? 1 : 0)
     }), "\u6B63\u5728\u8BA2\u9605"), React.createElement("p", {
       className: "helper"
-    }, "\u5F00\u542F\u6708\u4ED8\u8BA2\u9605\u540E\uFF0C\u6240\u9009\u6708\u4EFD\u4F1A\u81EA\u52A8\u751F\u6210\u4E00\u6761\u7EED\u8BA2\u8D26\u5355\uFF1B\u5B63\u5EA6\u3001\u5E74\u4ED8\u53C2\u4E0E\u6708\u5EA6\u9884\u4F30\uFF0C\u5E74\u4ED8\u5728\u7EED\u8BA2\u6708\u63D0\u9192\u3002")) : React.createElement("div", {
+    }, form.cycle_type === 'monthly' ? '月付自动入账' : form.cycle_type === 'yearly' ? '年付到期月提醒' : '季付按月折算预估'))) : React.createElement("div", {
       className: "form-grid"
     }, React.createElement(Field, {
       label: "\u9884\u8BA1\u53D1\u552E\u6708\u4EFD"
@@ -621,13 +657,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       key: key
     }, label))))), React.createElement(FormError, {
       error: error
-    }), React.createElement("button", {
-      className: "button primary full",
-      disabled: busy
-    }, busy ? '保存中…' : '保存计划', React.createElement(Icon, {
-      name: "check",
-      size: 17
-    }))));
+    })));
   }
   function SerialAdvance({
     serial,

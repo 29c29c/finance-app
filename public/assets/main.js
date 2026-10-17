@@ -249,14 +249,16 @@
       }
     };
     const summary = useMemo(() => planSummary(data.subscriptions, data.serials, month), [data.subscriptions, data.serials, month]);
-    const add = () => setModal({
+    // Keep mounting and the amount input's layout-effect focus inside the tap gesture.
+    const openAmountModal = value => ReactDOM.flushSync(() => setModal(value));
+    const add = () => openAmountModal({
       kind: 'ledger'
     });
-    const edit = item => setModal({
+    const edit = item => openAmountModal({
       kind: 'ledger',
       item
     });
-    const planForm = (table, item) => setModal({
+    const planForm = (table, item) => openAmountModal({
       kind: 'plan',
       table,
       item

@@ -72,7 +72,10 @@
     children,
     onClose,
     wide = false,
-    busy = false
+    busy = false,
+    compact = false,
+    autoFocusAmount = false,
+    footer
   }) {
     const ref = useRef(null);
     const overlayRef = useRef(null);
@@ -81,7 +84,7 @@
     const busyRef = useRef(busy);
     closeRef.current = onClose;
     busyRef.current = busy;
-    useEffect(() => {
+    React.useLayoutEffect(() => {
       const previous = document.activeElement;
       const mobile = window.matchMedia('(max-width: 760px), (pointer: coarse)').matches;
       const scrollX = window.scrollX, scrollY = window.scrollY;
@@ -94,8 +97,8 @@
         Object.assign(document.body.style, { position: 'fixed', top: `${-scrollY}px`, left: `${-scrollX}px`, width: '100%' });
       }
       const unbindViewport = F.bindModalViewport(overlayRef.current, bodyRef.current);
-      const first = mobile ? ref.current : ref.current.querySelector('[data-autofocus]') || ref.current.querySelector('input, select, textarea') || ref.current;
-      // Focus the mobile dialog itself: opening a sheet must not summon the keyboard.
+      const first = mobile && !autoFocusAmount ? ref.current : ref.current.querySelector('[data-autofocus]') || ref.current.querySelector('input, select, textarea') || ref.current;
+      // Amount forms mount synchronously from the tap, keeping focus in the user gesture.
       first.focus({ preventScroll: true });
       const handleKey = e => {
         if (e.key === 'Escape' && !busyRef.current) closeRef.current();
@@ -121,7 +124,7 @@
         previous?.focus({ preventScroll: true });
       };
     }, []);
-    return <div ref={overlayRef} className="overlay" onClick={e => !busy && e.target === e.currentTarget && onClose()}><section ref={ref} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="modal-title" className={`modal ${wide ? 'modal-wide' : ''}`}>
+    return <div ref={overlayRef} className="overlay" onClick={e => !busy && e.target === e.currentTarget && onClose()}><section ref={ref} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="modal-title" className={`modal ${wide ? 'modal-wide' : ''} ${compact ? 'modal-compact' : ''}`}>
         <div className="sheet-handle" />
         <header className="modal-header">
           <div>
@@ -131,6 +134,7 @@
           <button type="button" className="icon-button" aria-label="关闭窗口" disabled={busy} onClick={onClose}><Icon name="x" /></button>
         </header>
         <div ref={bodyRef} className="modal-body">{children}</div>
+        {footer && <div className="modal-footer">{footer}</div>}
       </section></div>;
   }
   function useSubmit() {
@@ -278,6 +282,8 @@
     }));
     const [saved, setSaved] = useState('');
     const amountRef = useRef(null);
+    const formRef = useRef(null);
+    const formId = React.useId();
     const {
       busy,
       error,
@@ -285,7 +291,7 @@
     } = useSubmit();
     const submit = (e, continuing = false) => {
       e.preventDefault();
-      if (!e.currentTarget.closest('form').reportValidity()) return;
+      if (!formRef.current.reportValidity()) return;
       setSaved('');
       run(async () => {
         await onSave({
@@ -305,7 +311,13 @@
         } else onClose();
       });
     };
-    return <Modal title={item ? '编辑账单' : '记一笔'} subtitle={item ? '让每一笔记录都准确。' : '记录这一刻的小小支出。'} onClose={onClose} busy={busy}><form onSubmit={submit} className="expense-form">
+    const footer = <div className="form-actions">
+      {!item && <button type="button" className="button secondary" disabled={busy} onClick={e => submit(e, true)}>保存并继续记</button>}
+      <button type="submit" form={formId} className="button primary" disabled={busy}>
+        {busy ? '保存中…' : '保存账单'}<Icon name="check" size={17} />
+      </button>
+    </div>;
+    return <Modal title={item ? '编辑账单' : '记一笔'} onClose={onClose} busy={busy} compact autoFocusAmount footer={footer}><form id={formId} ref={formRef} onSubmit={submit} className="expense-form">
         <Field label="支出金额" controlId="expense-amount"><div className="amount-input">
             <span>¥</span>
             <input id="expense-amount" ref={amountRef} data-autofocus className="input" aria-label="支出金额" type="number" inputMode="decimal" min="0" max="99999999" step="0.01" placeholder="0.00" value={form.amount} onChange={e => setForm({
@@ -323,7 +335,8 @@
             <span>{label}</span>
           </button>)}
         </fieldset>
-        <Field label="名称 / 备注"><input className="input" placeholder="这笔钱花在了哪里？" value={form.name} onChange={e => setForm({
+        <div className="compact-grid">
+        <Field label="名称 / 备注"><input className="input" placeholder="名称（选填）" value={form.name} onChange={e => setForm({
             ...form,
             name: e.target.value
           })} maxLength={160} /></Field>
@@ -331,16 +344,10 @@
             ...form,
             date: e.target.value
           })} /></Field>
-        {item?.source_type === 'subscription' && <p className="helper">这条记录由月付订阅自动生成。金额或日期的永久修改请到「固定订阅」中操作。</p>}
+        </div>
+        {item?.source_type === 'subscription' && <p className="helper">自动订阅账单；长期修改请到「固定订阅」。</p>}
         <FormError error={error} />
         {saved && <p className="text-green" role="status">{saved}</p>}
-        <div className="form-actions">
-          {!item && <button type="button" className="button secondary" disabled={busy} onClick={e => submit(e, true)}>保存并继续记</button>}
-          <button className="button primary" disabled={busy}>
-            {busy ? '保存中…' : '保存账单'}
-            <Icon name="check" size={17} />
-          </button>
-        </div>
       </form></Modal>;
   }
   function PlanForm({
@@ -351,6 +358,7 @@
     onSave
   }) {
     const subscription = kind === 'subscriptions';
+    const formId = React.useId();
     const [form, setForm] = useState(item || (subscription ? {
       name: '',
       price: '',
@@ -382,9 +390,14 @@
         onClose();
       });
     };
-    return <Modal title={`${item ? '编辑' : '新增'}${subscription ? '订阅' : '连载计划'}`} subtitle={subscription ? '把固定支出，提前安排好。' : '为下一期喜欢的作品，留一点预算。'} onClose={onClose} busy={busy}><form onSubmit={submit}>
+    const footer = <div className="form-actions"><button type="submit" form={formId} className="button primary full" disabled={busy}>
+      {busy ? '保存中…' : '保存计划'}<Icon name="check" size={17} />
+    </button></div>;
+    return <Modal title={`${item ? '编辑' : '新增'}${subscription ? '订阅' : '连载计划'}`} onClose={onClose} busy={busy} compact autoFocusAmount footer={footer}><form id={formId} onSubmit={submit}>
+        <div className="compact-grid">
+        <Field label={subscription ? '每期金额' : '预计金额'}><input data-autofocus className="input" type="number" inputMode="decimal" step="0.01" min="0" max="99999999" required value={form.price} onChange={e => set('price', e.target.value)} placeholder="0.00" /></Field>
         <Field label={subscription ? '订阅名称' : '连载名称'}><input className="input" value={form.name} onChange={e => set('name', e.target.value)} required maxLength={120} placeholder={subscription ? '例如 Apple Music' : '例如 三体·漫画第12卷'} /></Field>
-        <Field label={subscription ? '每期金额' : '预计金额'}><input className="input" type="number" inputMode="decimal" step="0.01" min="0" max="99999999" required value={form.price} onChange={e => set('price', e.target.value)} placeholder="0.00" /></Field>
+        </div>
         {subscription ? <><div className="form-grid">
           <Field label="支付周期"><select className="input" value={form.cycle_type} onChange={e => set('cycle_type', e.target.value)}>
               <option value="monthly">每月</option>
@@ -392,15 +405,11 @@
               <option value="yearly">每年</option>
             </select></Field>
           <Field label="续订日期"><input className="input" type="date" value={form.first_payment_date || ''} onChange={e => set('first_payment_date', e.target.value)} required /></Field>
-        </div><label className="check-label"><input type="checkbox" checked={!!Number(form.is_active)} onChange={e => set('is_active', e.target.checked ? 1 : 0)} />正在订阅</label><p className="helper">开启月付订阅后，所选月份会自动生成一条续订账单；季度、年付参与月度预估，年付在续订月提醒。</p></> : <div className="form-grid">
+        </div><div className="subscription-options"><label className="check-label"><input type="checkbox" checked={!!Number(form.is_active)} onChange={e => set('is_active', e.target.checked ? 1 : 0)} />正在订阅</label><p className="helper">{form.cycle_type === 'monthly' ? '月付自动入账' : form.cycle_type === 'yearly' ? '年付到期月提醒' : '季付按月折算预估'}</p></div></> : <div className="form-grid">
           <Field label="预计发售月份"><input className="input" type="month" value={form.expected_release_date} onChange={e => set('expected_release_date', e.target.value)} required /></Field>
           <Field label="计划状态"><select className="input" value={form.status} onChange={e => set('status', e.target.value)}>{Object.entries(SERIAL_STATUS_LABELS).map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select></Field>
         </div>}
         <FormError error={error} />
-        <button className="button primary full" disabled={busy}>
-          {busy ? '保存中…' : '保存计划'}
-          <Icon name="check" size={17} />
-        </button>
       </form></Modal>;
   }
   function SerialAdvance({
