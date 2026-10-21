@@ -280,8 +280,6 @@
       name: item?.name || '',
       amount: item ? String(item.amount) : ''
     }));
-    const [saved, setSaved] = useState('');
-    const amountRef = useRef(null);
     const formRef = useRef(null);
     const formId = React.useId();
     const {
@@ -289,30 +287,35 @@
       error,
       run
     } = useSubmit();
-    const submit = (e, continuing = false) => {
-      e.preventDefault();
+    const save = category => {
+      if (busy) return;
       if (!formRef.current.reportValidity()) return;
-      setSaved('');
       run(async () => {
         await onSave({
           ...form,
-          name: form.name.trim() || CATEGORIES[form.category],
+          category,
+          name: form.name.trim() || CATEGORIES[category],
           amount: Number(form.amount)
         });
-        localStorage.setItem('finance-last-category', form.category);
-        if (continuing) {
-          setForm(prev => ({
-            ...prev,
-            amount: '',
-            name: ''
-          }));
-          setSaved('已保存，再记一笔吧');
-          requestAnimationFrame(() => amountRef.current?.focus({ preventScroll: true }));
-        } else onClose();
+        localStorage.setItem('finance-last-category', category);
+        onClose();
       });
     };
-    const footer = <div className="form-actions">
-      {!item && <button type="button" className="button secondary" disabled={busy} onClick={e => submit(e, true)}>保存并继续记</button>}
+    const submit = e => {
+      e.preventDefault();
+      if (item) save(form.category);
+    };
+    const categories = <fieldset className={`category-picker ${item ? '' : 'category-quick'}`} disabled={busy}>
+      <legend>{item ? '支出分类' : busy ? '记账中…' : '选择分类，立即记账'}</legend>
+      {Object.entries(CATEGORIES).map(([key, label]) => <button type="button" key={key} aria-pressed={form.category === key} onClick={() => {
+        setForm(prev => ({ ...prev, category: key }));
+        if (!item) save(key);
+      }} className={form.category === key ? 'selected' : ''}>
+        <span className={`category-icon ${key}`}><Icon name={key} /></span>
+        <span>{label}</span>
+      </button>)}
+    </fieldset>;
+    const footer = item && <div className="form-actions">
       <button type="submit" form={formId} className="button primary" disabled={busy}>
         {busy ? '保存中…' : '保存账单'}<Icon name="check" size={17} />
       </button>
@@ -320,21 +323,12 @@
     return <Modal title={item ? '编辑账单' : '记一笔'} onClose={onClose} busy={busy} compact autoFocusAmount footer={footer}><form id={formId} ref={formRef} onSubmit={submit} className="expense-form">
         <Field label="支出金额" controlId="expense-amount"><div className="amount-input">
             <span>¥</span>
-            <input id="expense-amount" ref={amountRef} data-autofocus className="input" aria-label="支出金额" type="number" inputMode="decimal" min="0" max="99999999" step="0.01" placeholder="0.00" value={form.amount} onChange={e => setForm({
+            <input id="expense-amount" data-autofocus className="input" aria-label="支出金额" type="number" inputMode="decimal" min="0" max="99999999" step="0.01" placeholder="0.00" value={form.amount} onChange={e => setForm({
               ...form,
               amount: e.target.value
             })} required />
           </div></Field>
-        <fieldset className="category-picker">
-          <legend>支出分类</legend>
-          {Object.entries(CATEGORIES).map(([key, label]) => <button type="button" key={key} aria-pressed={form.category === key} onClick={() => setForm({
-            ...form,
-            category: key
-          })} className={form.category === key ? 'selected' : ''}>
-            <span className={`category-icon ${key}`}><Icon name={key} /></span>
-            <span>{label}</span>
-          </button>)}
-        </fieldset>
+        {item && categories}
         <div className="compact-grid">
         <Field label="名称 / 备注"><input className="input" placeholder="名称（选填）" value={form.name} onChange={e => setForm({
             ...form,
@@ -345,9 +339,9 @@
             date: e.target.value
           })} /></Field>
         </div>
+        {!item && categories}
         {item?.source_type === 'subscription' && <p className="helper">自动订阅账单；长期修改请到「固定订阅」。</p>}
         <FormError error={error} />
-        {saved && <p className="text-green" role="status">{saved}</p>}
       </form></Modal>;
   }
   function PlanForm({

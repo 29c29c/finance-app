@@ -386,8 +386,6 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       name: item?.name || '',
       amount: item ? String(item.amount) : ''
     }));
-    const [saved, setSaved] = useState('');
-    const amountRef = useRef(null);
     const formRef = useRef(null);
     const formId = React.useId();
     const {
@@ -395,38 +393,47 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       error,
       run
     } = useSubmit();
-    const submit = (e, continuing = false) => {
-      e.preventDefault();
+    const save = category => {
+      if (busy) return;
       if (!formRef.current.reportValidity()) return;
-      setSaved('');
       run(async () => {
         await onSave({
           ...form,
-          name: form.name.trim() || CATEGORIES[form.category],
+          category,
+          name: form.name.trim() || CATEGORIES[category],
           amount: Number(form.amount)
         });
-        localStorage.setItem('finance-last-category', form.category);
-        if (continuing) {
-          setForm(prev => ({
-            ...prev,
-            amount: '',
-            name: ''
-          }));
-          setSaved('已保存，再记一笔吧');
-          requestAnimationFrame(() => amountRef.current?.focus({
-            preventScroll: true
-          }));
-        } else onClose();
+        localStorage.setItem('finance-last-category', category);
+        onClose();
       });
     };
-    const footer = React.createElement("div", {
-      className: "form-actions"
-    }, !item && React.createElement("button", {
+    const submit = e => {
+      e.preventDefault();
+      if (item) save(form.category);
+    };
+    const categories = React.createElement("fieldset", {
+      className: `category-picker ${item ? '' : 'category-quick'}`,
+      disabled: busy
+    }, React.createElement("legend", null, item ? '支出分类' : busy ? '记账中…' : '选择分类，立即记账'), Object.entries(CATEGORIES).map(([key, label]) => React.createElement("button", {
       type: "button",
-      className: "button secondary",
-      disabled: busy,
-      onClick: e => submit(e, true)
-    }, "\u4FDD\u5B58\u5E76\u7EE7\u7EED\u8BB0"), React.createElement("button", {
+      key: key,
+      "aria-pressed": form.category === key,
+      onClick: () => {
+        setForm(prev => ({
+          ...prev,
+          category: key
+        }));
+        if (!item) save(key);
+      },
+      className: form.category === key ? 'selected' : ''
+    }, React.createElement("span", {
+      className: `category-icon ${key}`
+    }, React.createElement(Icon, {
+      name: key
+    })), React.createElement("span", null, label))));
+    const footer = item && React.createElement("div", {
+      className: "form-actions"
+    }, React.createElement("button", {
       type: "submit",
       form: formId,
       className: "button primary",
@@ -454,7 +461,6 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       className: "amount-input"
     }, React.createElement("span", null, "\xA5"), React.createElement("input", {
       id: "expense-amount",
-      ref: amountRef,
       "data-autofocus": true,
       className: "input",
       "aria-label": "\u652F\u51FA\u91D1\u989D",
@@ -470,22 +476,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         amount: e.target.value
       }),
       required: true
-    }))), React.createElement("fieldset", {
-      className: "category-picker"
-    }, React.createElement("legend", null, "\u652F\u51FA\u5206\u7C7B"), Object.entries(CATEGORIES).map(([key, label]) => React.createElement("button", {
-      type: "button",
-      key: key,
-      "aria-pressed": form.category === key,
-      onClick: () => setForm({
-        ...form,
-        category: key
-      }),
-      className: form.category === key ? 'selected' : ''
-    }, React.createElement("span", {
-      className: `category-icon ${key}`
-    }, React.createElement(Icon, {
-      name: key
-    })), React.createElement("span", null, label)))), React.createElement("div", {
+    }))), item && categories, React.createElement("div", {
       className: "compact-grid"
     }, React.createElement(Field, {
       label: "\u540D\u79F0 / \u5907\u6CE8"
@@ -509,14 +500,11 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         ...form,
         date: e.target.value
       })
-    }))), item?.source_type === 'subscription' && React.createElement("p", {
+    }))), !item && categories, item?.source_type === 'subscription' && React.createElement("p", {
       className: "helper"
     }, "\u81EA\u52A8\u8BA2\u9605\u8D26\u5355\uFF1B\u957F\u671F\u4FEE\u6539\u8BF7\u5230\u300C\u56FA\u5B9A\u8BA2\u9605\u300D\u3002"), React.createElement(FormError, {
       error: error
-    }), saved && React.createElement("p", {
-      className: "text-green",
-      role: "status"
-    }, saved)));
+    })));
   }
   function PlanForm({
     kind,
